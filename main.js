@@ -51,6 +51,12 @@ class StateMachine {
     if (nh?.onEnter) nh.onEnter();
   }
 
+  /** Fire onEnter for the initial state. Call once after all states are registered. */
+  start() {
+    const h = this._handlers[this._state];
+    if (h?.onEnter) h.onEnter();
+  }
+
   /** Delegate update to the current state's handler. */
   update(dt) {
     const h = this._handlers[this._state];
@@ -145,7 +151,7 @@ class Terrain {
 
 // ─── Overlay helpers ──────────────────────────────────────────────────────────
 
-function drawCenteredText(ctx, lines, startY, { font = '48px monospace', fillStyle = '#fff', lineHeight = 60 } = {}) {
+function drawCenteredText(ctx, lines, startY, canvasWidth, { font = '48px monospace', fillStyle = '#fff', lineHeight = 60 } = {}) {
   ctx.save();
   ctx.font = font;
   ctx.fillStyle = fillStyle;
@@ -153,7 +159,7 @@ function drawCenteredText(ctx, lines, startY, { font = '48px monospace', fillSty
   ctx.textBaseline = 'middle';
   let y = startY;
   for (const line of lines) {
-    ctx.fillText(line, CANVAS_WIDTH / 2, y);
+    ctx.fillText(line, canvasWidth / 2, y);
     y += lineHeight;
   }
   ctx.restore();
@@ -180,14 +186,13 @@ class Game {
     // Input
     this._boundKeyDown = this._onKeyDown.bind(this);
     window.addEventListener('keydown', this._boundKeyDown);
-    canvas.addEventListener('click', this._onClick.bind(this));
+    this._boundClick = this._onClick.bind(this);
+    canvas.addEventListener('click', this._boundClick);
 
     // State machine
     this.sm = new StateMachine(GameState.TITLE);
     this._registerStates();
-    this.sm.register(GameState.TITLE).transition; // kick off enter hook
-    // Manually fire onEnter for initial state
-    this.sm._handlers[GameState.TITLE]?.onEnter?.();
+    this.sm.start();
   }
 
   _registerStates() {
@@ -324,7 +329,7 @@ class Game {
     ctx.restore();
 
     drawCenteredText(ctx,
-      ['GAME OVER', `FINAL SCORE: ${this.score}`, 'PRESS ENTER TO RESTART'],
+      ['GAME OVER', `FINAL SCORE: ${this.score}`, 'PRESS ENTER / SPACE OR CLICK TO RESTART'],
       this.height / 2 - 60,
       { font: '40px monospace', fillStyle: '#ff4444', lineHeight: 56 }
     );
