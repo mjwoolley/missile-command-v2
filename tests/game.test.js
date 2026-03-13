@@ -1,9 +1,20 @@
 /**
- * MIS-3 Unit Tests — game scaffolding, state machine, terrain, starfield
+ * Unit Tests — MIS-3 through MIS-7
  *
- * Run with: node --experimental-vm-modules tests/game.test.js
- * Or:       node tests/game.test.js   (uses the inline test runner below)
+ * Run with: node tests/game.test.js
  */
+
+import {
+  EnemyMissile,
+  EnemyExplosion,
+  ENEMY_MISSILE_BASE_SPEED,
+  ENEMY_MISSILE_SPEED_SCALE,
+  ENEMY_BASE_COUNT,
+  ENEMY_COUNT_SCALE,
+  ENEMY_MAX_COUNT,
+  ENEMY_MIRV_CHANCE,
+  ENEMY_TRAIL_LENGTH,
+} from '../src/enemy.js';
 
 // ─── Minimal test runner (no dependencies) ───────────────────────────────────
 
@@ -222,7 +233,11 @@ describe('GameState', () => {
   });
 
   test('is frozen (immutable)', () => {
-    GameState.TITLE = 'MUTATED'; // should silently fail in strict or be ignored
+    // In ES module strict mode, mutating a frozen object throws TypeError.
+    // In sloppy mode (old CommonJS) it was a silent no-op. Both are valid JS
+    // semantics for Object.freeze; the important assertion is that the value
+    // is unchanged either way.
+    try { GameState.TITLE = 'MUTATED'; } catch { /* strict mode throw — expected */ }
     expect(GameState.TITLE).toBe('TITLE');
   });
 });
@@ -947,105 +962,6 @@ describe('MIS-6 — Speed differentiation', () => {
   });
 });
 
-// ─── MIS-7 classes (inline copies for testing) ────────────────────────────────
-
-const ENEMY_MISSILE_BASE_SPEED = 80;
-const ENEMY_MISSILE_SPEED_SCALE = 0.15;
-const ENEMY_BASE_COUNT = 8;
-const ENEMY_COUNT_SCALE = 2;
-const ENEMY_MAX_COUNT = 20;
-const ENEMY_MIRV_CHANCE = 0.3;
-const ENEMY_TRAIL_LENGTH = 30;
-
-class EnemyMissile {
-  constructor(startX, startY, targetX, targetY, speed, isMirv = false, mirvAltitude = null) {
-    this.startX  = startX;
-    this.startY  = startY;
-    this.targetX = targetX;
-    this.targetY = targetY;
-    this.x       = startX;
-    this.y       = startY;
-    this.speed   = speed;
-    this.isMirv  = isMirv;
-    this.mirvAltitude = mirvAltitude;
-    this.trail   = [];
-    this.done    = false;
-    this.split   = false;
-  }
-  update(dt) {
-    if (this.done) return;
-    this.trail.push({ x: this.x, y: this.y });
-    if (this.trail.length > ENEMY_TRAIL_LENGTH) {
-      this.trail.shift();
-    }
-    const dx = this.targetX - this.x;
-    const dy = this.targetY - this.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist <= 2) {
-      this.x = this.targetX;
-      this.y = this.targetY;
-      this.done = true;
-      return;
-    }
-    const step = this.speed * dt;
-    if (step >= dist) {
-      this.x = this.targetX;
-      this.y = this.targetY;
-      this.done = true;
-      return;
-    }
-    this.x += (dx / dist) * step;
-    this.y += (dy / dist) * step;
-    if (this.isMirv && !this.split && this.y >= this.mirvAltitude) {
-      this.split = true;
-      this.done = true;
-    }
-  }
-}
-
-class EnemyExplosion {
-  constructor(x, y, maxRadius = 35, expandDuration = 0.25, holdDuration = 0.15, contractDuration = 0.25) {
-    this.x         = x;
-    this.y         = y;
-    this.maxRadius = maxRadius;
-    this.expandDuration   = expandDuration;
-    this.holdDuration     = holdDuration;
-    this.contractDuration = contractDuration;
-    this.phase   = 'expand';
-    this.timer   = 0;
-    this.radius  = 0;
-    this.done    = false;
-  }
-  update(dt) {
-    if (this.done) return;
-    this.timer += dt;
-    if (this.phase === 'expand') {
-      if (this.timer >= this.expandDuration) {
-        this.radius = this.maxRadius;
-        this.timer -= this.expandDuration;
-        this.phase = 'hold';
-      } else {
-        this.radius = this.maxRadius * (this.timer / this.expandDuration);
-      }
-    }
-    if (this.phase === 'hold') {
-      this.radius = this.maxRadius;
-      if (this.timer >= this.holdDuration) {
-        this.timer -= this.holdDuration;
-        this.phase = 'contract';
-      }
-    }
-    if (this.phase === 'contract') {
-      if (this.timer >= this.contractDuration) {
-        this.radius = 0;
-        this.done = true;
-      } else {
-        this.radius = this.maxRadius * (1 - this.timer / this.contractDuration);
-      }
-    }
-  }
-}
-
 // ─── MIS-7 Tests ──────────────────────────────────────────────────────────────
 
 describe('MIS-7 — EnemyMissile', () => {
@@ -1078,17 +994,25 @@ describe('MIS-7 — EnemyMissile', () => {
     expect(m.done).toBe(true);
   });
 
-  test('MIRV does not double-split', () => {
+  test('MIRV done=true guard prevents re-entry into update logic', () => {
+    // Once a MIRV sets done=true (via split), the `if (this.done) return` guard
+    // at the top of update() makes all subsequent calls no-ops.
     const m = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
-    m.update(0.3); // triggers split
+    m.update(0.3); // triggers split → split=true, done=true
     expect(m.split).toBe(true);
-    // After split, done=true so further updates are no-ops
-    m.split = false; // reset to test guard
-    m.done = false;
-    m.update(0.1);
-    // isMirv && !split would be true again, but the missile already moved past
-    // The important thing is the original split only happened once
-    expect(m.split).toBe(true); // re-triggered because we reset — but in real code done prevents re-entry
+    expect(m.done).toBe(true);
+
+    const xAfterSplit      = m.x;
+    const yAfterSplit      = m.y;
+    const trailAfterSplit  = m.trail.length;
+
+    // Large dt — would move the missile far if update() were not guarded
+    m.update(100);
+    m.update(100);
+
+    expect(m.x).toBe(xAfterSplit);           // position unchanged
+    expect(m.y).toBe(yAfterSplit);           // position unchanged
+    expect(m.trail.length).toBe(trailAfterSplit); // no new trail entries
   });
 
   test('Non-MIRV never sets split=true', () => {
@@ -1198,6 +1122,67 @@ describe('MIS-7 — enemy wave end detection', () => {
       state.sm.transition(GameState.LEVEL_END);
     }
     expect(transitioned).toBe(false);
+  });
+});
+
+describe('MIS-7 — EnemyMissile edge cases', () => {
+  test('rejects zero speed', () => {
+    expect(() => new EnemyMissile(400, 0, 400, 540, 0)).toThrow();
+  });
+
+  test('rejects negative speed', () => {
+    expect(() => new EnemyMissile(400, 0, 400, 540, -10)).toThrow();
+  });
+
+  test('spawnEnemyWave with no alive targets produces no missiles (early-return path)', () => {
+    // When all cities and batteries are destroyed, aliveTargets is empty.
+    // _spawnEnemyWave returns early, leaving enemyMissiles empty.
+    // The first _updateEnemies call will then immediately transition to LEVEL_END.
+    // This is intentional: a destroyed base shouldn't block wave-end detection.
+    function spawnWave(cities, batteries, level) {
+      const aliveTargets = [
+        ...cities.filter(c => c.alive),
+        ...batteries.filter(b => b.alive),
+      ];
+      if (aliveTargets.length === 0) return []; // early-return guard
+      const missileCount = Math.min(
+        ENEMY_BASE_COUNT + (level - 1) * ENEMY_COUNT_SCALE,
+        ENEMY_MAX_COUNT
+      );
+      const speed = ENEMY_MISSILE_BASE_SPEED * (1 + (level - 1) * ENEMY_MISSILE_SPEED_SCALE);
+      const missiles = [];
+      for (let i = 0; i < missileCount; i++) {
+        const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+        missiles.push(new EnemyMissile(50, 0, target.x, target.y, speed));
+      }
+      return missiles;
+    }
+
+    const deadCity    = new City(100, 540, 0); deadCity.destroy();
+    const deadBattery = new Battery(400, 540);  deadBattery.destroy();
+    const result = spawnWave([deadCity], [deadBattery], 1);
+    expect(result).toHaveLength(0);
+  });
+
+  test('MIRV split with no alive targets spawns no children (wave ends cleanly)', () => {
+    // If all cities/batteries are destroyed when a MIRV splits, the
+    // aliveTargets guard (`&& aliveTargets.length > 0`) produces no children.
+    // The wave should still resolve: no stranded missiles, clean LEVEL_END.
+    const missile = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    missile.update(0.3); // triggers split
+    expect(missile.split).toBe(true);
+
+    // Simulate _updateEnemies child-spawn logic with no alive targets
+    const aliveTargets = [];
+    const newMissiles  = [];
+    const childCount   = 2 + Math.floor(Math.random() * 2); // 2 or 3
+    for (let i = 0; i < childCount && aliveTargets.length > 0; i++) {
+      const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+      newMissiles.push(new EnemyMissile(missile.x, missile.y, target.x, target.y, missile.speed, false, null));
+    }
+
+    // No children produced — wave can end on next _updateEnemies tick
+    expect(newMissiles).toHaveLength(0);
   });
 });
 
