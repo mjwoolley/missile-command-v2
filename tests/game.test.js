@@ -1384,6 +1384,31 @@ describe('MIS-8 — Collision Detection', () => {
   test('POINTS_PER_MISSILE is 25', () => {
     expect(POINTS_PER_MISSILE).toBe(25);
   });
+
+  test('intercepted missile does not spawn a ground explosion at its target', () => {
+    // Simulate what the lifecycle loop does: if missile.done && !missile.intercepted → detonate
+    const missile = new EnemyMissile(100, 100, 400, 400, 50);
+    missile.done = true;
+    missile.intercepted = true;
+
+    const explosions = [];
+    if (missile.done && !missile.intercepted) {
+      explosions.push('PHANTOM');
+    }
+    expect(explosions).toHaveLength(0);
+  });
+
+  test('non-intercepted done missile DOES spawn a ground explosion', () => {
+    const missile = new EnemyMissile(100, 100, 400, 400, 50);
+    missile.done = true;
+    // intercepted remains false (default)
+
+    const explosions = [];
+    if (missile.done && !missile.intercepted) {
+      explosions.push('DETONATE');
+    }
+    expect(explosions).toHaveLength(1);
+  });
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

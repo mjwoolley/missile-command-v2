@@ -697,8 +697,8 @@ class Game {
           const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
           newMissiles.push(new EnemyMissile(missile.x, missile.y, target.x, target.y, missile.speed, false, null));
         }
-      } else if (missile.done) {
-        // Reached target — detonate
+      } else if (missile.done && !missile.intercepted) {
+        // Reached target — detonate (intercepted missiles already spawned a chain explosion)
         this.enemyExplosions.push(new EnemyExplosion(missile.targetX, missile.targetY));
       } else {
         remaining.push(missile);

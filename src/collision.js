@@ -35,6 +35,7 @@ export function checkCollisions(state) {
       const dy = missile.y - explosion.y;
       if (dx * dx + dy * dy <= explosion.radius * explosion.radius) {
         missile.done = true;
+        missile.intercepted = true;
         score += POINTS_PER_MISSILE;
         const chainExplosion = new EnemyExplosion(missile.x, missile.y);
         chainExplosion.isChain = true;
@@ -55,6 +56,7 @@ export function checkCollisions(state) {
       const dy = missile.y - explosion.y;
       if (dx * dx + dy * dy <= explosion.radius * explosion.radius) {
         missile.done = true;
+        missile.intercepted = true;
         score += POINTS_PER_MISSILE;
         const chainExplosion = new EnemyExplosion(missile.x, missile.y);
         chainExplosion.isChain = true;

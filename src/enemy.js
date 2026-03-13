@@ -33,6 +33,7 @@ export class EnemyMissile {
     this.trail        = [];
     this.done         = false;
     this.split        = false;
+    this.intercepted  = false;
   }
 
   update(dt) {
