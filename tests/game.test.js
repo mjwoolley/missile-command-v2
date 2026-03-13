@@ -103,6 +103,10 @@ const CANVAS_HEIGHT = 600;
 const GROUND_HEIGHT = 60;
 const STAR_COUNT    = 150;
 
+const BATTERY_MISSILE_COUNT = 10;
+const PLAYER_MISSILE_SPEED  = 300;
+const BATTERY_APEX_OFFSET   = 24;
+
 class Starfield {
   constructor(count, width, height) {
     this.stars = Array.from({ length: count }, () => ({
@@ -161,10 +165,49 @@ class Battery {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.missiles = 10;
+    this.missiles = BATTERY_MISSILE_COUNT;
     this.alive = true;
   }
   destroy() { this.alive = false; }
+}
+
+/**
+ * Minimal _initLayout() helper — mirrors the Game method for unit-testing _reset().
+ * Creates fresh batteries and cities in classic 9-slot positions.
+ */
+function makeLayout(width, height) {
+  const slotWidth    = width / 9;
+  const groundY      = height - GROUND_HEIGHT;
+  const batterySlots = [0, 3, 6];
+  const citySlots    = [1, 2, 4, 5, 7, 8];
+  const batteries = batterySlots.map(i => new Battery(i * slotWidth + slotWidth / 2, groundY));
+  const cities    = citySlots.map((i, idx) => new City(i * slotWidth + slotWidth / 2, groundY, idx));
+  return { batteries, cities };
+}
+
+/** Minimal _reset() logic for unit-testing without DOM. */
+function makeResetState() {
+  const state = {
+    level: 99,
+    score: 12345,
+    playerMissiles:   [{}],
+    playerExplosions: [{}],
+    batteries: [],
+    cities:    [],
+  };
+  state._initLayout = function () {
+    const layout = makeLayout(CANVAS_WIDTH, CANVAS_HEIGHT);
+    this.batteries = layout.batteries;
+    this.cities    = layout.cities;
+  };
+  state._reset = function () {
+    this.level = 1;
+    this.score = 0;
+    this.playerMissiles   = [];
+    this.playerExplosions = [];
+    this._initLayout();
+  };
+  return state;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -441,10 +484,10 @@ describe('City', () => {
 });
 
 describe('Battery', () => {
-  test('starts alive with 10 missiles', () => {
+  test(`starts alive with ${BATTERY_MISSILE_COUNT} missiles`, () => {
     const b = new Battery(200, 540);
     expect(b.alive).toBe(true);
-    expect(b.missiles).toBe(10);
+    expect(b.missiles).toBe(BATTERY_MISSILE_COUNT);
   });
 
   test('has correct position', () => {
@@ -463,6 +506,316 @@ describe('Battery', () => {
     const b = new Battery(200, 540);
     b.missiles--;
     expect(b.missiles).toBe(9);
+  });
+});
+
+// ─── MIS-5 classes (inline copies for testing) ───────────────────────────────
+
+class Crosshair {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+  }
+  render(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(this.x - 20, this.y);
+    ctx.lineTo(this.x + 20, this.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y - 20);
+    ctx.lineTo(this.x, this.y + 20);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+class PlayerMissile {
+  constructor(startX, startY, targetX, targetY, speed = 300) {
+    this.startX  = startX;
+    this.startY  = startY;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x       = startX;
+    this.y       = startY;
+    this.speed   = speed;
+    this.done    = false;
+  }
+  update(dt) {
+    if (this.done) return;
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist <= 2) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    const step = this.speed * dt;
+    if (step >= dist) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    this.x += (dx / dist) * step;
+    this.y += (dy / dist) * step;
+  }
+}
+
+class PlayerExplosion {
+  constructor(x, y, maxRadius = 40, duration = 0.5) {
+    this.x         = x;
+    this.y         = y;
+    this.maxRadius = maxRadius;
+    this.duration  = duration;
+    this.radius    = 0;
+    this.alpha     = 1;
+    this.done      = false;
+    this.timer     = 0;
+  }
+  update(dt) {
+    if (this.done) return;
+    this.timer += dt;
+    const progress = Math.min(this.timer / this.duration, 1);
+    this.radius = this.maxRadius * progress;
+    this.alpha  = 1 - progress;
+    if (this.timer >= this.duration) {
+      this.done = true;
+    }
+  }
+}
+
+// ─── MIS-5 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-5 — Crosshair', () => {
+  test('Crosshair tracks position', () => {
+    const ch = new Crosshair();
+    expect(ch.x).toBe(0);
+    expect(ch.y).toBe(0);
+    ch.x = 400;
+    ch.y = 300;
+    expect(ch.x).toBe(400);
+    expect(ch.y).toBe(300);
+  });
+});
+
+describe('MIS-5 — PlayerMissile', () => {
+  test('default speed is PLAYER_MISSILE_SPEED', () => {
+    const m = new PlayerMissile(0, 0, 1000, 0);
+    expect(m.speed).toBe(PLAYER_MISSILE_SPEED);
+  });
+
+  test('moves toward target', () => {
+    const m = new PlayerMissile(0, 0, 300, 0, 100);
+    m.update(1); // 1 second at 100 px/sec
+    expect(m.x).toBeGreaterThan(0);
+    expect(m.done).toBe(false);
+  });
+
+  test('marks done when within 2px of target', () => {
+    const m = new PlayerMissile(0, 0, 10, 0, 1000);
+    m.update(1); // overshoots
+    expect(m.done).toBe(true);
+    expect(m.x).toBe(10);
+    expect(m.y).toBe(0);
+  });
+
+  test('does not overshoot target', () => {
+    const m = new PlayerMissile(0, 0, 50, 0, 10000);
+    m.update(1); // speed * dt = 10000 >> 50
+    expect(m.x).toBe(50);
+    expect(m.y).toBe(0);
+    expect(m.done).toBe(true);
+  });
+});
+
+describe('MIS-5 — PlayerExplosion', () => {
+  test('grows radius over time', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.5);
+    e.update(0.25); // half-way
+    expect(e.radius).toBeGreaterThan(0);
+    expect(e.radius).toBeLessThanOrEqual(40);
+    expect(e.done).toBe(false);
+  });
+
+  test('marks done after duration', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.5);
+    e.update(0.5);
+    expect(e.done).toBe(true);
+    expect(e.radius).toBe(40);
+  });
+});
+
+describe('MIS-5 — _fireNearest logic', () => {
+  // Replicate the findNearest algorithm inline (pure, no DOM)
+  function fireNearest(batteries, targetX) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < batteries.length; i++) {
+      const b = batteries[i];
+      if (!b.alive || b.missiles <= 0) continue;
+      const d = Math.abs(b.x - targetX);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  test('selects nearest available battery', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    // Click near right battery
+    expect(fireNearest(batteries, 650)).toBe(2);
+    // Click near left battery
+    expect(fireNearest(batteries, 120)).toBe(0);
+    // Click near center battery
+    expect(fireNearest(batteries, 380)).toBe(1);
+  });
+
+  test('skips destroyed batteries', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[2].destroy();
+    // Click near destroyed right battery — should pick center
+    expect(fireNearest(batteries, 650)).toBe(1);
+  });
+
+  test('skips empty batteries', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[0].missiles = 0;
+    // Click near left battery — should pick center
+    expect(fireNearest(batteries, 120)).toBe(1);
+  });
+
+  test('does nothing if all batteries unavailable', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[0].destroy();
+    batteries[1].missiles = 0;
+    batteries[2].destroy();
+    expect(fireNearest(batteries, 400)).toBe(-1);
+  });
+});
+
+describe('MIS-5 — _reset() restores batteries and cities', () => {
+  test('resets level and score to initial values', () => {
+    const state = makeResetState();
+    state._reset();
+    expect(state.level).toBe(1);
+    expect(state.score).toBe(0);
+  });
+
+  test('clears in-flight missiles and explosions', () => {
+    const state = makeResetState();
+    state._reset();
+    expect(state.playerMissiles).toHaveLength(0);
+    expect(state.playerExplosions).toHaveLength(0);
+  });
+
+  test('restores exactly 3 batteries, all alive', () => {
+    const state = makeResetState();
+    // Destroy everything first
+    state._initLayout();
+    state.batteries.forEach(b => b.destroy());
+    state.batteries.forEach(b => { b.missiles = 0; });
+    // Now reset
+    state._reset();
+    expect(state.batteries).toHaveLength(3);
+    for (const b of state.batteries) {
+      expect(b.alive).toBe(true);
+    }
+  });
+
+  test('restores batteries with full ammo after reset', () => {
+    const state = makeResetState();
+    state._initLayout();
+    state.batteries.forEach(b => { b.missiles = 0; });
+    state._reset();
+    for (const b of state.batteries) {
+      expect(b.missiles).toBe(BATTERY_MISSILE_COUNT);
+    }
+  });
+
+  test('restores exactly 6 cities, all alive', () => {
+    const state = makeResetState();
+    state._initLayout();
+    state.cities.forEach(c => c.destroy());
+    state._reset();
+    expect(state.cities).toHaveLength(6);
+    for (const c of state.cities) {
+      expect(c.alive).toBe(true);
+    }
+  });
+});
+
+describe('MIS-5 — _mouseReady guard (no firing before first mousemove)', () => {
+  // Replicate the guard logic inline
+  function makeInputState() {
+    return {
+      _mouseX:     0,
+      _mouseY:     0,
+      _mouseReady: false,
+      fired:       [],
+      _fireFrom(idx, x, y) { this.fired.push({ idx, x, y }); },
+      _onKeyDown(key) {
+        // mirrors Game._onKeyDown firing block
+        if (!this._mouseReady) return;
+        if (key === '1') this._fireFrom(0, this._mouseX, this._mouseY);
+        if (key === '2') this._fireFrom(1, this._mouseX, this._mouseY);
+        if (key === '3') this._fireFrom(2, this._mouseX, this._mouseY);
+      },
+      _onMouseMove(x, y) {
+        this._mouseX     = x;
+        this._mouseY     = y;
+        this._mouseReady = true;
+      },
+    };
+  }
+
+  test('pressing 1/2/3 before mousemove does NOT fire', () => {
+    const s = makeInputState();
+    s._onKeyDown('1');
+    s._onKeyDown('2');
+    s._onKeyDown('3');
+    expect(s.fired).toHaveLength(0);
+  });
+
+  test('pressing 1/2/3 AFTER mousemove does fire', () => {
+    const s = makeInputState();
+    s._onMouseMove(400, 300);
+    s._onKeyDown('1');
+    expect(s.fired).toHaveLength(1);
+    expect(s.fired[0].idx).toBe(0);
+    expect(s.fired[0].x).toBe(400);
+  });
+
+  test('_mouseReady is false at construction, true after first move', () => {
+    const s = makeInputState();
+    expect(s._mouseReady).toBe(false);
+    s._onMouseMove(100, 200);
+    expect(s._mouseReady).toBe(true);
   });
 });
 
