@@ -16,6 +16,8 @@ import {
   ENEMY_TRAIL_LENGTH,
 } from '../src/enemy.js';
 
+import { checkCollisions, POINTS_PER_MISSILE } from '../src/collision.js';
+
 // ─── Minimal test runner (no dependencies) ───────────────────────────────────
 
 let passed = 0;
@@ -1183,6 +1185,177 @@ describe('MIS-7 — EnemyMissile edge cases', () => {
 
     // No children produced — wave can end on next _updateEnemies tick
     expect(newMissiles).toHaveLength(0);
+  });
+});
+
+// ─── MIS-8 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-8 — Collision Detection', () => {
+  /** Helper: create a minimal collision state. */
+  function makeCollisionState(overrides = {}) {
+    return {
+      playerExplosions: [],
+      enemyMissiles:    [],
+      enemyExplosions:  [],
+      cities:           [],
+      batteries:        [],
+      score:            0,
+      ...overrides,
+    };
+  }
+
+  test('player explosion destroys enemy missile in radius → missile.done, score += 25', () => {
+    const explosion = new PlayerExplosion(100, 100, 40);
+    explosion.update(0.25); // expand to full radius (40px)
+    const missile = new EnemyMissile(110, 100, 110, 540, 80); // 10px away, within 40px radius
+    const state = makeCollisionState({
+      playerExplosions: [explosion],
+      enemyMissiles:    [missile],
+    });
+    const result = checkCollisions(state);
+    expect(missile.done).toBe(true);
+    expect(result.score).toBe(POINTS_PER_MISSILE);
+  });
+
+  test('player explosion does NOT destroy missile outside radius', () => {
+    const explosion = new PlayerExplosion(100, 100, 40);
+    explosion.update(0.25); // radius = 40
+    const missile = new EnemyMissile(200, 100, 200, 540, 80); // 100px away, outside 40px radius
+    const state = makeCollisionState({
+      playerExplosions: [explosion],
+      enemyMissiles:    [missile],
+    });
+    const result = checkCollisions(state);
+    expect(missile.done).toBe(false);
+    expect(result.score).toBe(0);
+  });
+
+  test('chain reaction: destroyed missile spawns EnemyExplosion with isChain = true', () => {
+    const explosion = new PlayerExplosion(100, 100, 40);
+    explosion.update(0.25); // radius = 40
+    const missile = new EnemyMissile(110, 100, 110, 540, 80);
+    const enemyExplosions = [];
+    const state = makeCollisionState({
+      playerExplosions: [explosion],
+      enemyMissiles:    [missile],
+      enemyExplosions:  enemyExplosions,
+    });
+    checkCollisions(state);
+    expect(enemyExplosions.length).toBeGreaterThan(0);
+    expect(enemyExplosions[0].isChain).toBe(true);
+    expect(enemyExplosions[0].x).toBe(missile.x);
+    expect(enemyExplosions[0].y).toBe(missile.y);
+  });
+
+  test('enemy ground explosion destroys city in radius', () => {
+    const city = new City(100, 540, 0);
+    const explosion = new EnemyExplosion(105, 540, 35); // 5px away, within 35px radius
+    explosion.update(0.25); // expand to full radius
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      cities:          [city],
+    });
+    checkCollisions(state);
+    expect(city.alive).toBe(false);
+  });
+
+  test('enemy ground explosion does NOT destroy city outside radius', () => {
+    const city = new City(200, 540, 0);
+    const explosion = new EnemyExplosion(100, 540, 35); // 100px away, outside 35px radius
+    explosion.update(0.25);
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      cities:          [city],
+    });
+    checkCollisions(state);
+    expect(city.alive).toBe(true);
+  });
+
+  test('chain explosion does NOT destroy cities', () => {
+    const city = new City(100, 540, 0);
+    const explosion = new EnemyExplosion(105, 540, 35);
+    explosion.isChain = true;
+    explosion.update(0.25);
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      cities:          [city],
+    });
+    checkCollisions(state);
+    expect(city.alive).toBe(true);
+  });
+
+  test('all cities destroyed → gameOver is true', () => {
+    const cities = [
+      new City(100, 540, 0),
+      new City(200, 540, 1),
+      new City(300, 540, 2),
+      new City(400, 540, 3),
+      new City(500, 540, 4),
+      new City(600, 540, 5),
+    ];
+    // Destroy all cities
+    for (const c of cities) c.destroy();
+    const state = makeCollisionState({ cities });
+    const result = checkCollisions(state);
+    expect(result.gameOver).toBe(true);
+  });
+
+  test('some cities alive → gameOver is false', () => {
+    const cities = [
+      new City(100, 540, 0),
+      new City(200, 540, 1),
+    ];
+    cities[0].destroy();
+    const state = makeCollisionState({ cities });
+    const result = checkCollisions(state);
+    expect(result.gameOver).toBe(false);
+  });
+
+  test('enemy ground explosion destroys battery in radius', () => {
+    const battery = new Battery(100, 540);
+    const explosion = new EnemyExplosion(105, 540, 35);
+    explosion.update(0.25);
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      batteries:       [battery],
+      cities:          [new City(400, 540, 0)], // keep a city alive to avoid gameOver
+    });
+    checkCollisions(state);
+    expect(battery.alive).toBe(false);
+  });
+
+  test('chain explosion does NOT destroy batteries', () => {
+    const battery = new Battery(100, 540);
+    const explosion = new EnemyExplosion(105, 540, 35);
+    explosion.isChain = true;
+    explosion.update(0.25);
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      batteries:       [battery],
+    });
+    checkCollisions(state);
+    expect(battery.alive).toBe(true);
+  });
+
+  test('existing enemy explosions can chain-destroy enemy missiles', () => {
+    // An existing (non-chain) enemy explosion should also destroy nearby enemy missiles
+    const explosion = new EnemyExplosion(100, 100, 35);
+    explosion.update(0.25); // radius = 35
+    const missile = new EnemyMissile(110, 100, 110, 540, 80); // 10px away
+    const state = makeCollisionState({
+      enemyExplosions: [explosion],
+      enemyMissiles:   [missile],
+    });
+    const result = checkCollisions(state);
+    expect(missile.done).toBe(true);
+    expect(result.score).toBe(POINTS_PER_MISSILE);
+    // Should have spawned a chain explosion
+    expect(state.enemyExplosions.length).toBe(2);
+    expect(state.enemyExplosions[1].isChain).toBe(true);
+  });
+
+  test('POINTS_PER_MISSILE is 25', () => {
+    expect(POINTS_PER_MISSILE).toBe(25);
   });
 });
 

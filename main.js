@@ -15,6 +15,8 @@ import {
   ENEMY_TRAIL_LENGTH,
 } from './src/enemy.js';
 
+import { checkCollisions } from './src/collision.js';
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const CANVAS_WIDTH  = 800;
@@ -708,9 +710,27 @@ class Game {
     for (const explosion of this.enemyExplosions) explosion.update(dt);
     this.enemyExplosions = this.enemyExplosions.filter(explosion => !explosion.done);
 
+    // Collision detection
+    this._checkCollisions();
+
     // Wave end detection
     if (this.enemyMissiles.length === 0 && this.enemyExplosions.length === 0) {
       this.sm.transition(GameState.LEVEL_END);
+    }
+  }
+
+  _checkCollisions() {
+    const result = checkCollisions({
+      playerExplosions: this.playerExplosions,
+      enemyMissiles:    this.enemyMissiles,
+      enemyExplosions:  this.enemyExplosions,
+      cities:           this.cities,
+      batteries:        this.batteries,
+      score:            this.score,
+    });
+    this.score = result.score;
+    if (result.gameOver) {
+      this.sm.transition(GameState.GAME_OVER);
     }
   }
 
