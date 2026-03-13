@@ -149,6 +149,108 @@ class Terrain {
   }
 }
 
+// ─── City ────────────────────────────────────────────────────────────────────
+
+const CITY_COLORS = ['#00ffff', '#ffff00', '#ff00ff', '#00ff00', '#ff8800', '#88ff88'];
+
+class City {
+  constructor(x, y, colorIndex) {
+    this.x = x;
+    this.y = y;
+    this.alive = true;
+    this.color = CITY_COLORS[colorIndex % CITY_COLORS.length];
+  }
+
+  destroy() {
+    this.alive = false;
+  }
+
+  render(ctx) {
+    if (this.alive) {
+      this._renderAlive(ctx);
+    } else {
+      this._renderDestroyed(ctx);
+    }
+  }
+
+  _renderAlive(ctx) {
+    ctx.save();
+    ctx.fillStyle = this.color;
+    // Three buildings of varying height, sitting on the ground (base at this.y)
+    ctx.fillRect(this.x - 15, this.y - 28, 8, 28);
+    ctx.fillRect(this.x - 5,  this.y - 38, 10, 38);
+    ctx.fillRect(this.x + 7,  this.y - 22, 8, 22);
+    // Window dots
+    ctx.fillStyle = '#000';
+    ctx.fillRect(this.x - 12, this.y - 22, 2, 2);
+    ctx.fillRect(this.x - 12, this.y - 16, 2, 2);
+    ctx.fillRect(this.x - 1,  this.y - 30, 2, 2);
+    ctx.fillRect(this.x - 1,  this.y - 22, 2, 2);
+    ctx.fillRect(this.x + 10, this.y - 16, 2, 2);
+    ctx.restore();
+  }
+
+  _renderDestroyed(ctx) {
+    ctx.save();
+    ctx.fillStyle = '#444';
+    // Rubble: small irregular shapes
+    ctx.fillRect(this.x - 14, this.y - 4, 6, 4);
+    ctx.fillRect(this.x - 6,  this.y - 6, 8, 6);
+    ctx.fillRect(this.x + 4,  this.y - 3, 7, 3);
+    ctx.fillRect(this.x - 2,  this.y - 2, 3, 2);
+    ctx.restore();
+  }
+}
+
+// ─── Battery ─────────────────────────────────────────────────────────────────
+
+class Battery {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.missiles = 10;
+    this.alive = true;
+  }
+
+  destroy() {
+    this.alive = false;
+  }
+
+  render(ctx) {
+    if (this.alive) {
+      this._renderAlive(ctx);
+    } else {
+      this._renderDestroyed(ctx);
+    }
+  }
+
+  _renderAlive(ctx) {
+    ctx.save();
+    // Dome / triangle pointing up
+    ctx.fillStyle = '#ddd';
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y - 24);      // apex
+    ctx.lineTo(this.x - 18, this.y);       // bottom-left
+    ctx.lineTo(this.x + 18, this.y);       // bottom-right
+    ctx.closePath();
+    ctx.fill();
+    // Missile count text below
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(String(this.missiles), this.x, this.y + 4);
+    ctx.restore();
+  }
+
+  _renderDestroyed(ctx) {
+    ctx.save();
+    ctx.fillStyle = '#555';
+    ctx.fillRect(this.x - 16, this.y - 4, 32, 4);
+    ctx.restore();
+  }
+}
+
 // ─── Overlay helpers ──────────────────────────────────────────────────────────
 
 function drawCenteredText(ctx, lines, startY, canvasWidth, { font = '48px monospace', fillStyle = '#fff', lineHeight = 60 } = {}) {
@@ -176,6 +278,20 @@ class Game {
 
     this.starfield = new Starfield(STAR_COUNT, this.width, this.height);
     this.terrain   = new Terrain(this.width, this.height);
+
+    // Classic layout: 9 slots across the bottom
+    // Batteries at slots 0, 3, 6 — Cities at slots 1, 2, 4, 5, 7, 8
+    const slotWidth = this.width / 9;
+    const groundY = CANVAS_HEIGHT - GROUND_HEIGHT;
+    const batterySlots = [0, 3, 6];
+    const citySlots    = [1, 2, 4, 5, 7, 8];
+
+    this.batteries = batterySlots.map(i =>
+      new Battery(i * slotWidth + slotWidth / 2, groundY)
+    );
+    this.cities = citySlots.map((i, idx) =>
+      new City(i * slotWidth + slotWidth / 2, groundY, idx)
+    );
 
     this.level     = 1;
     this.score     = 0;
@@ -266,6 +382,10 @@ class Game {
 
     // Terrain
     this.terrain.render(ctx);
+
+    // Cities and batteries
+    for (const city of this.cities)       city.render(ctx);
+    for (const battery of this.batteries) battery.render(ctx);
 
     // HUD (score / level) when playing or level end
     const state = this.sm.current;
