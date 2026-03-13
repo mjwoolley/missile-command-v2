@@ -466,6 +466,211 @@ describe('Battery', () => {
   });
 });
 
+// ─── MIS-5 classes (inline copies for testing) ───────────────────────────────
+
+class Crosshair {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+  }
+  render(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(this.x - 20, this.y);
+    ctx.lineTo(this.x + 20, this.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y - 20);
+    ctx.lineTo(this.x, this.y + 20);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+class PlayerMissile {
+  constructor(startX, startY, targetX, targetY, speed = 300) {
+    this.startX  = startX;
+    this.startY  = startY;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x       = startX;
+    this.y       = startY;
+    this.speed   = speed;
+    this.done    = false;
+  }
+  update(dt) {
+    if (this.done) return;
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist <= 2) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    const step = this.speed * dt;
+    if (step >= dist) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    this.x += (dx / dist) * step;
+    this.y += (dy / dist) * step;
+  }
+}
+
+class PlayerExplosion {
+  constructor(x, y, maxRadius = 40, duration = 0.5) {
+    this.x         = x;
+    this.y         = y;
+    this.maxRadius = maxRadius;
+    this.duration  = duration;
+    this.radius    = 0;
+    this.alpha     = 1;
+    this.done      = false;
+    this.timer     = 0;
+  }
+  update(dt) {
+    if (this.done) return;
+    this.timer += dt;
+    const progress = Math.min(this.timer / this.duration, 1);
+    this.radius = this.maxRadius * progress;
+    this.alpha  = 1 - progress;
+    if (this.timer >= this.duration) {
+      this.done = true;
+    }
+  }
+}
+
+// ─── MIS-5 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-5 — Crosshair', () => {
+  test('Crosshair tracks position', () => {
+    const ch = new Crosshair();
+    expect(ch.x).toBe(0);
+    expect(ch.y).toBe(0);
+    ch.x = 400;
+    ch.y = 300;
+    expect(ch.x).toBe(400);
+    expect(ch.y).toBe(300);
+  });
+});
+
+describe('MIS-5 — PlayerMissile', () => {
+  test('moves toward target', () => {
+    const m = new PlayerMissile(0, 0, 300, 0, 100);
+    m.update(1); // 1 second at 100 px/sec
+    expect(m.x).toBeGreaterThan(0);
+    expect(m.done).toBe(false);
+  });
+
+  test('marks done when within 2px of target', () => {
+    const m = new PlayerMissile(0, 0, 10, 0, 1000);
+    m.update(1); // overshoots
+    expect(m.done).toBe(true);
+    expect(m.x).toBe(10);
+    expect(m.y).toBe(0);
+  });
+
+  test('does not overshoot target', () => {
+    const m = new PlayerMissile(0, 0, 50, 0, 10000);
+    m.update(1); // speed * dt = 10000 >> 50
+    expect(m.x).toBe(50);
+    expect(m.y).toBe(0);
+    expect(m.done).toBe(true);
+  });
+});
+
+describe('MIS-5 — PlayerExplosion', () => {
+  test('grows radius over time', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.5);
+    e.update(0.25); // half-way
+    expect(e.radius).toBeGreaterThan(0);
+    expect(e.radius).toBeLessThanOrEqual(40);
+    expect(e.done).toBe(false);
+  });
+
+  test('marks done after duration', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.5);
+    e.update(0.5);
+    expect(e.done).toBe(true);
+    expect(e.radius).toBe(40);
+  });
+});
+
+describe('MIS-5 — _fireNearest logic', () => {
+  // Replicate the findNearest algorithm inline (pure, no DOM)
+  function fireNearest(batteries, targetX) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < batteries.length; i++) {
+      const b = batteries[i];
+      if (!b.alive || b.missiles <= 0) continue;
+      const d = Math.abs(b.x - targetX);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  test('selects nearest available battery', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    // Click near right battery
+    expect(fireNearest(batteries, 650)).toBe(2);
+    // Click near left battery
+    expect(fireNearest(batteries, 120)).toBe(0);
+    // Click near center battery
+    expect(fireNearest(batteries, 380)).toBe(1);
+  });
+
+  test('skips destroyed batteries', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[2].destroy();
+    // Click near destroyed right battery — should pick center
+    expect(fireNearest(batteries, 650)).toBe(1);
+  });
+
+  test('skips empty batteries', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[0].missiles = 0;
+    // Click near left battery — should pick center
+    expect(fireNearest(batteries, 120)).toBe(1);
+  });
+
+  test('does nothing if all batteries unavailable', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    batteries[0].destroy();
+    batteries[1].missiles = 0;
+    batteries[2].destroy();
+    expect(fireNearest(batteries, 400)).toBe(-1);
+  });
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(50)}`);

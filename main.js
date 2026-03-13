@@ -251,6 +251,139 @@ class Battery {
   }
 }
 
+// ─── Crosshair ───────────────────────────────────────────────────────────────
+
+class Crosshair {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+  }
+
+  /** Draw a crosshair: two crossed lines + a small center circle. */
+  render(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+
+    // Horizontal line
+    ctx.beginPath();
+    ctx.moveTo(this.x - 20, this.y);
+    ctx.lineTo(this.x + 20, this.y);
+    ctx.stroke();
+
+    // Vertical line
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y - 20);
+    ctx.lineTo(this.x, this.y + 20);
+    ctx.stroke();
+
+    // Center circle
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+// ─── PlayerMissile ───────────────────────────────────────────────────────────
+
+class PlayerMissile {
+  /**
+   * @param {number} startX
+   * @param {number} startY
+   * @param {number} targetX
+   * @param {number} targetY
+   * @param {number} speed  px/sec
+   */
+  constructor(startX, startY, targetX, targetY, speed = 300) {
+    this.startX  = startX;
+    this.startY  = startY;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x       = startX;
+    this.y       = startY;
+    this.speed   = speed;
+    this.done    = false;
+  }
+
+  update(dt) {
+    if (this.done) return;
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist <= 2) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    const step = this.speed * dt;
+    if (step >= dist) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    this.x += (dx / dist) * step;
+    this.y += (dy / dist) * step;
+  }
+
+  render(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#88ff88';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(this.startX, this.startY);
+    ctx.lineTo(this.x, this.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ─── PlayerExplosion ─────────────────────────────────────────────────────────
+
+class PlayerExplosion {
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} maxRadius
+   * @param {number} duration  seconds
+   */
+  constructor(x, y, maxRadius = 40, duration = 0.5) {
+    this.x         = x;
+    this.y         = y;
+    this.maxRadius = maxRadius;
+    this.duration  = duration;
+    this.radius    = 0;
+    this.alpha     = 1;
+    this.done      = false;
+    this.timer     = 0;
+  }
+
+  update(dt) {
+    if (this.done) return;
+    this.timer += dt;
+    const progress = Math.min(this.timer / this.duration, 1);
+    this.radius = this.maxRadius * progress;
+    this.alpha  = 1 - progress;
+    if (this.timer >= this.duration) {
+      this.done = true;
+    }
+  }
+
+  render(ctx) {
+    if (this.done) return;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,200,100,${this.alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ─── Overlay helpers ──────────────────────────────────────────────────────────
 
 function drawCenteredText(ctx, lines, startY, canvasWidth, { font = '48px monospace', fillStyle = '#fff', lineHeight = 60 } = {}) {
@@ -296,6 +429,16 @@ class Game {
     this.level     = 1;
     this.score     = 0;
 
+    // Player missiles & explosions
+    this.playerMissiles   = [];
+    this.playerExplosions = [];
+
+    // Crosshair
+    this.crosshair = new Crosshair();
+    this._mouseX = 0;
+    this._mouseY = 0;
+    canvas.style.cursor = 'none';
+
     // Timing
     this._lastTime = null;
 
@@ -304,6 +447,8 @@ class Game {
     window.addEventListener('keydown', this._boundKeyDown);
     this._boundClick = this._onClick.bind(this);
     canvas.addEventListener('click', this._boundClick);
+    this._boundMouseMove = this._onMouseMove.bind(this);
+    canvas.addEventListener('mousemove', this._boundMouseMove);
 
     // State machine
     this.sm = new StateMachine(GameState.TITLE);
@@ -321,7 +466,19 @@ class Game {
         onEnter:  () => { /* spawn enemies etc. in future stories */ },
         onUpdate: (dt) => {
           this.starfield.update(dt);
-          // Future: update missiles, explosions, cities…
+
+          // Update player missiles
+          for (const m of this.playerMissiles) {
+            m.update(dt);
+            if (m.done) {
+              this.playerExplosions.push(new PlayerExplosion(m.targetX, m.targetY));
+            }
+          }
+          this.playerMissiles = this.playerMissiles.filter(m => !m.done);
+
+          // Update player explosions
+          for (const e of this.playerExplosions) e.update(dt);
+          this.playerExplosions = this.playerExplosions.filter(e => !e.done);
         },
       })
       .register(GameState.LEVEL_END, {
@@ -349,17 +506,70 @@ class Game {
       if (state === GameState.TITLE)     this.sm.transition(GameState.PLAYING);
       if (state === GameState.GAME_OVER) { this._reset(); this.sm.transition(GameState.TITLE); }
     }
+    if (state === GameState.PLAYING) {
+      if (e.key === '1') this._fireFrom(0, this._mouseX, this._mouseY);
+      if (e.key === '2') this._fireFrom(1, this._mouseX, this._mouseY);
+      if (e.key === '3') this._fireFrom(2, this._mouseX, this._mouseY);
+    }
   }
 
-  _onClick() {
+  _onClick(e) {
     const state = this.sm.current;
     if (state === GameState.TITLE)     this.sm.transition(GameState.PLAYING);
     if (state === GameState.GAME_OVER) { this._reset(); this.sm.transition(GameState.TITLE); }
+    if (state === GameState.PLAYING) {
+      const rect = this.canvas.getBoundingClientRect();
+      const scaleX = this.canvas.width / rect.width;
+      const scaleY = this.canvas.height / rect.height;
+      const canvasX = (e.clientX - rect.left) * scaleX;
+      const canvasY = (e.clientY - rect.top) * scaleY;
+      this._fireNearest(canvasX, canvasY);
+    }
+  }
+
+  _onMouseMove(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    this._mouseX = (e.clientX - rect.left) * scaleX;
+    this._mouseY = (e.clientY - rect.top) * scaleY;
+  }
+
+  // ── Firing ────────────────────────────────────────────────────────────────
+
+  /** Fire from a specific battery toward (targetX, targetY). */
+  _fireFrom(batteryIndex, targetX, targetY) {
+    if (batteryIndex < 0 || batteryIndex >= this.batteries.length) return;
+    const battery = this.batteries[batteryIndex];
+    if (!battery.alive || battery.missiles <= 0) return;
+    battery.missiles--;
+    this.playerMissiles.push(
+      new PlayerMissile(battery.x, battery.y - 24, targetX, targetY)
+    );
+  }
+
+  /** Fire from the nearest available battery toward (targetX, targetY). */
+  _fireNearest(targetX, targetY) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < this.batteries.length; i++) {
+      const b = this.batteries[i];
+      if (!b.alive || b.missiles <= 0) continue;
+      const d = Math.abs(b.x - targetX);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    if (best === -1) return;
+    this._fireFrom(best, targetX, targetY);
   }
 
   _reset() {
     this.level = 1;
     this.score = 0;
+    this.playerMissiles   = [];
+    this.playerExplosions = [];
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────
@@ -387,6 +597,10 @@ class Game {
     for (const city of this.cities)       city.render(ctx);
     for (const battery of this.batteries) battery.render(ctx);
 
+    // Player missiles and explosions
+    for (const m of this.playerMissiles)   m.render(ctx);
+    for (const e of this.playerExplosions) e.render(ctx);
+
     // HUD (score / level) when playing or level end
     const state = this.sm.current;
     if (state === GameState.PLAYING || state === GameState.LEVEL_END) {
@@ -397,6 +611,13 @@ class Game {
     if (state === GameState.TITLE)     this._renderTitle(ctx);
     if (state === GameState.LEVEL_END) this._renderLevelEnd(ctx);
     if (state === GameState.GAME_OVER) this._renderGameOver(ctx);
+
+    // Crosshair (drawn last, on top of everything)
+    if (state === GameState.PLAYING) {
+      this.crosshair.x = this._mouseX;
+      this.crosshair.y = this._mouseY;
+      this.crosshair.render(ctx);
+    }
   }
 
   _renderHUD(ctx) {
@@ -465,6 +686,8 @@ class Game {
   destroy() {
     window.removeEventListener('keydown', this._boundKeyDown);
     this.canvas.removeEventListener('click', this._boundClick);
+    this.canvas.removeEventListener('mousemove', this._boundMouseMove);
+    this.canvas.style.cursor = '';
     if (this._rafId !== undefined) {
       cancelAnimationFrame(this._rafId);
       this._rafId = undefined;
