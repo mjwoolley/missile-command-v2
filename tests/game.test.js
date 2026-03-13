@@ -1,5 +1,5 @@
 /**
- * Unit Tests — MIS-3 through MIS-7
+ * Unit Tests — MIS-3 through MIS-9
  *
  * Run with: node tests/game.test.js
  */
@@ -13,10 +13,23 @@ import {
   ENEMY_COUNT_SCALE,
   ENEMY_MAX_COUNT,
   ENEMY_MIRV_CHANCE,
+  ENEMY_MIRV_CHANCE_SCALE,
+  ENEMY_MIRV_CHANCE_MAX,
   ENEMY_TRAIL_LENGTH,
+  getMirvChance,
 } from '../src/enemy.js';
 
 import { checkCollisions, POINTS_PER_MISSILE } from '../src/collision.js';
+
+import {
+  getScoreMultiplier,
+  getBonusCitiesEarned,
+  getMissileBonus,
+  getCityBonus,
+  BONUS_MISSILE_POINTS,
+  BONUS_CITY_POINTS,
+  BONUS_CITY_THRESHOLD,
+} from '../src/scoring.js';
 
 // ─── Minimal test runner (no dependencies) ───────────────────────────────────
 
@@ -1408,6 +1421,149 @@ describe('MIS-8 — Collision Detection', () => {
       explosions.push('DETONATE');
     }
     expect(explosions).toHaveLength(1);
+  });
+});
+
+// ─── MIS-9: getScoreMultiplier ─────────────────────────────────────────────────
+
+describe('MIS-9: getScoreMultiplier', () => {
+  test('level 1 returns 1x', () => {
+    expect(getScoreMultiplier(1)).toBe(1);
+  });
+
+  test('level 2 returns 1x', () => {
+    expect(getScoreMultiplier(2)).toBe(1);
+  });
+
+  test('level 3 returns 2x', () => {
+    expect(getScoreMultiplier(3)).toBe(2);
+  });
+
+  test('level 4 returns 2x', () => {
+    expect(getScoreMultiplier(4)).toBe(2);
+  });
+
+  test('level 5 returns 3x', () => {
+    expect(getScoreMultiplier(5)).toBe(3);
+  });
+
+  test('level 10 returns 5x', () => {
+    expect(getScoreMultiplier(10)).toBe(5);
+  });
+
+  test('level 11 returns 6x (max)', () => {
+    expect(getScoreMultiplier(11)).toBe(6);
+  });
+
+  test('level 12 returns 6x (capped)', () => {
+    expect(getScoreMultiplier(12)).toBe(6);
+  });
+
+  test('level 20 returns 6x (capped)', () => {
+    expect(getScoreMultiplier(20)).toBe(6);
+  });
+});
+
+// ─── MIS-9: getBonusCitiesEarned ──────────────────────────────────────────────
+
+describe('MIS-9: getBonusCitiesEarned', () => {
+  test('0 score returns 0', () => {
+    expect(getBonusCitiesEarned(0)).toBe(0);
+  });
+
+  test('9999 score returns 0', () => {
+    expect(getBonusCitiesEarned(9999)).toBe(0);
+  });
+
+  test('10000 score returns 1', () => {
+    expect(getBonusCitiesEarned(10000)).toBe(1);
+  });
+
+  test('25000 score returns 2', () => {
+    expect(getBonusCitiesEarned(25000)).toBe(2);
+  });
+
+  test('30000 score returns 3', () => {
+    expect(getBonusCitiesEarned(30000)).toBe(3);
+  });
+});
+
+// ─── MIS-9: getMissileBonus / getCityBonus ────────────────────────────────────
+
+describe('MIS-9: bonus calculations', () => {
+  test('missile bonus: 10 missiles × 5 pts × 2x = 100', () => {
+    expect(getMissileBonus(10, 2)).toBe(100);
+  });
+
+  test('missile bonus: 0 missiles = 0', () => {
+    expect(getMissileBonus(0, 3)).toBe(0);
+  });
+
+  test('city bonus: 4 cities × 100 pts × 3x = 1200', () => {
+    expect(getCityBonus(4, 3)).toBe(1200);
+  });
+
+  test('city bonus: 0 cities = 0', () => {
+    expect(getCityBonus(0, 5)).toBe(0);
+  });
+});
+
+// ─── MIS-9: getMirvChance ─────────────────────────────────────────────────────
+
+describe('MIS-9: getMirvChance', () => {
+  test('level 1 returns base 30%', () => {
+    expect(getMirvChance(1)).toBe(0.3);
+  });
+
+  test('level 2 returns 35%', () => {
+    expect(getMirvChance(2)).toBe(0.35);
+  });
+
+  test('level 5 returns 50%', () => {
+    expect(getMirvChance(5)).toBe(0.5);
+  });
+
+  test('level 9 returns 70% (cap)', () => {
+    expect(getMirvChance(9)).toBe(0.7);
+  });
+
+  test('level 20 returns 70% (capped)', () => {
+    expect(getMirvChance(20)).toBe(0.7);
+  });
+});
+
+// ─── MIS-9: checkCollisions with multiplier ───────────────────────────────────
+
+describe('MIS-9: checkCollisions multiplier', () => {
+  test('score uses multiplier when intercepting missile', () => {
+    const explosion = { x: 100, y: 100, radius: 50, done: false };
+    const missile = new EnemyMissile(100, 100, 400, 400, 50);
+    const state = {
+      playerExplosions: [explosion],
+      enemyMissiles:    [missile],
+      enemyExplosions:  [],
+      cities:           [],
+      batteries:        [],
+      score:            0,
+      multiplier:       3,
+    };
+    const result = checkCollisions(state);
+    expect(result.score).toBe(POINTS_PER_MISSILE * 3);
+  });
+
+  test('multiplier defaults to 1 when not provided', () => {
+    const explosion = { x: 100, y: 100, radius: 50, done: false };
+    const missile = new EnemyMissile(100, 100, 400, 400, 50);
+    const state = {
+      playerExplosions: [explosion],
+      enemyMissiles:    [missile],
+      enemyExplosions:  [],
+      cities:           [],
+      batteries:        [],
+      score:            0,
+    };
+    const result = checkCollisions(state);
+    expect(result.score).toBe(POINTS_PER_MISSILE);
   });
 });
 

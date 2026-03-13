@@ -11,11 +11,20 @@ import {
   ENEMY_BASE_COUNT,
   ENEMY_COUNT_SCALE,
   ENEMY_MAX_COUNT,
-  ENEMY_MIRV_CHANCE,
   ENEMY_TRAIL_LENGTH,
+  getMirvChance,
 } from './src/enemy.js';
 
 import { checkCollisions } from './src/collision.js';
+
+import {
+  getScoreMultiplier,
+  getBonusCitiesEarned,
+  getMissileBonus,
+  getCityBonus,
+  BONUS_MISSILE_POINTS,
+  BONUS_CITY_POINTS,
+} from './src/scoring.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -482,6 +491,9 @@ class Game {
 
     this.level = 1;
     this.score = 0;
+    this.bonusCitiesReserve = 0;   // bonus cities waiting to be deployed
+    this.bonusCitiesAwarded = 0;   // how many bonus city thresholds have been crossed
+    this._bonusCityFlashTimer = 0; // countdown for "BONUS CITY!" notification
     this._initLayout();
 
     // Player missiles & explosions
@@ -559,16 +571,46 @@ class Game {
 
           // Update enemies
           this._updateEnemies(dt);
+
+          // Bonus city flash timer
+          if (this._bonusCityFlashTimer > 0) this._bonusCityFlashTimer -= dt;
         },
       })
       .register(GameState.LEVEL_END, {
-        onEnter:  () => { this._levelEndTimer = 3; },
+        onEnter:  () => {
+          const multiplier = getScoreMultiplier(this.level);
+          const remainingMissiles = this.batteries.reduce((sum, b) => sum + (b.alive ? b.missiles : 0), 0);
+          const survivingCities = this.cities.filter(c => c.alive).length;
+          this._tallyMissileTotal = getMissileBonus(remainingMissiles, multiplier);
+          this._tallyCityTotal = getCityBonus(survivingCities, multiplier);
+          this._tallyMissileCounted = 0;
+          this._tallyCityCounted = 0;
+          this._tallyTimer = 0;
+          this._tallyDuration = 2;  // ~2 seconds for animation
+          this._tallyDone = false;
+          this._levelEndPause = 0;  // 1s pause after tally before transition
+        },
         onUpdate: (dt) => {
           this.starfield.update(dt);
-          this._levelEndTimer -= dt;
-          if (this._levelEndTimer <= 0) {
-            this.level++;
-            this.sm.transition(GameState.PLAYING);
+          if (!this._tallyDone) {
+            this._tallyTimer += dt;
+            const progress = Math.min(this._tallyTimer / this._tallyDuration, 1);
+            this._tallyMissileCounted = Math.floor(this._tallyMissileTotal * progress);
+            this._tallyCityCounted = Math.floor(this._tallyCityTotal * progress);
+            if (progress >= 1) {
+              this._tallyMissileCounted = this._tallyMissileTotal;
+              this._tallyCityCounted = this._tallyCityTotal;
+              this.score += this._tallyMissileTotal + this._tallyCityTotal;
+              this._checkBonusCityAward();
+              this._tallyDone = true;
+            }
+          } else {
+            this._levelEndPause += dt;
+            if (this._levelEndPause >= 1) {
+              this.level++;
+              this._startNewLevel();
+              this.sm.transition(GameState.PLAYING);
+            }
           }
         },
       })
@@ -668,7 +710,7 @@ class Game {
       const startX = 50 + Math.random() * (CANVAS_WIDTH - 100);
       const startY = 0;
       const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
-      const isMirv = Math.random() < ENEMY_MIRV_CHANCE;
+      const isMirv = Math.random() < getMirvChance(this.level);
       let mirvAltitude = null;
       if (isMirv) {
         mirvAltitude = target.y * (0.3 + Math.random() * 0.4);
@@ -727,8 +769,10 @@ class Game {
       cities:           this.cities,
       batteries:        this.batteries,
       score:            this.score,
+      multiplier:       getScoreMultiplier(this.level),
     });
     this.score = result.score;
+    this._checkBonusCityAward();
     if (result.gameOver) {
       this.sm.transition(GameState.GAME_OVER);
     }
@@ -737,11 +781,40 @@ class Game {
   _reset() {
     this.level = 1;
     this.score = 0;
+    this.bonusCitiesReserve = 0;
+    this.bonusCitiesAwarded = 0;
+    this._bonusCityFlashTimer = 0;
     this.playerMissiles   = [];
     this.playerExplosions = [];
     this.enemyMissiles    = [];
     this.enemyExplosions  = [];
     this._initLayout();  // restore batteries (full ammo, alive) and cities (alive)
+  }
+
+  /** Check if a new bonus city threshold has been crossed and award it. */
+  _checkBonusCityAward() {
+    const earned = getBonusCitiesEarned(this.score);
+    while (this.bonusCitiesAwarded < earned) {
+      this.bonusCitiesAwarded++;
+      this.bonusCitiesReserve++;
+      this._bonusCityFlashTimer = 2; // show "BONUS CITY!" for 2 seconds
+    }
+  }
+
+  /** Restore batteries and deploy bonus cities at the start of a new level. */
+  _startNewLevel() {
+    // Restore all batteries: alive, full ammo
+    for (const b of this.batteries) {
+      b.alive = true;
+      b.missiles = BATTERY_MISSILE_COUNT;
+    }
+    // Deploy reserved bonus cities into destroyed city slots
+    for (const city of this.cities) {
+      if (!city.alive && this.bonusCitiesReserve > 0) {
+        city.alive = true;
+        this.bonusCitiesReserve--;
+      }
+    }
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────
@@ -783,6 +856,13 @@ class Game {
       this._renderHUD(ctx);
     }
 
+    // Bonus city flash
+    if (this._bonusCityFlashTimer > 0) {
+      const alpha = Math.min(this._bonusCityFlashTimer, 1);
+      drawCenteredText(ctx, ['BONUS CITY!'], this.height / 2 - 80, this.width,
+        { font: '36px monospace', fillStyle: `rgba(0, 255, 255, ${alpha})`, lineHeight: 40 });
+    }
+
     // Overlay screens
     if (state === GameState.TITLE)     this._renderTitle(ctx);
     if (state === GameState.LEVEL_END) this._renderLevelEnd(ctx);
@@ -802,6 +882,9 @@ class Game {
     ctx.fillStyle = '#0f0';
     ctx.textAlign = 'left';
     ctx.fillText(`SCORE: ${this.score}`, 16, 24);
+    ctx.textAlign = 'center';
+    const mult = getScoreMultiplier(this.level);
+    ctx.fillText(`MULT: ${mult}x`, this.width / 2, 24);
     ctx.textAlign = 'right';
     ctx.fillText(`LEVEL: ${this.level}`, this.width - 16, 24);
     ctx.restore();
@@ -834,11 +917,18 @@ class Game {
     ctx.fillRect(0, 0, this.width, this.height);
     ctx.restore();
 
-    drawCenteredText(ctx,
-      [`LEVEL ${this.level} COMPLETE`, `SCORE: ${this.score}`],
-      this.height / 2 - 40,
+    const mult = getScoreMultiplier(this.level);
+    const lines = [`LEVEL ${this.level} COMPLETE`];
+    lines.push(`MISSILE BONUS: ${this._tallyMissileCounted}`);
+    lines.push(`CITY BONUS: ${this._tallyCityCounted}`);
+    if (this._tallyDone) {
+      lines.push(`SCORE: ${this.score}`);
+    }
+
+    drawCenteredText(ctx, lines,
+      this.height / 2 - 60,
       this.width,
-      { font: '36px monospace', fillStyle: '#ff0', lineHeight: 50 }
+      { font: '28px monospace', fillStyle: '#ff0', lineHeight: 40 }
     );
   }
 
