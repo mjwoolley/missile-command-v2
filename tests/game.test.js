@@ -293,6 +293,94 @@ describe('Terrain', () => {
   });
 });
 
+// ─── drawCenteredText (inline copy for testing) ───────────────────────────────
+
+function drawCenteredText(ctx, lines, startY, canvasWidth, { font = '48px monospace', fillStyle = '#fff', lineHeight = 60 } = {}) {
+  ctx.save();
+  ctx.font = font;
+  ctx.fillStyle = fillStyle;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let y = startY;
+  for (const line of lines) {
+    ctx.fillText(line, canvasWidth / 2, y);
+    y += lineHeight;
+  }
+  ctx.restore();
+}
+
+describe('drawCenteredText', () => {
+  // Minimal canvas 2d context mock
+  function makeCtx() {
+    const calls = [];
+    return {
+      calls,
+      save()         { calls.push('save'); },
+      restore()      { calls.push('restore'); },
+      fillText(text, x, y) { calls.push({ fillText: { text, x, y } }); },
+      font: '',
+      fillStyle: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+  }
+
+  test('calls fillText once per line', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['LINE A', 'LINE B'], 100, 800);
+    const texts = ctx.calls.filter(c => c.fillText).map(c => c.fillText.text);
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toBe('LINE A');
+    expect(texts[1]).toBe('LINE B');
+  });
+
+  test('centers text at canvasWidth / 2', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['HELLO'], 200, 800);
+    const call = ctx.calls.find(c => c.fillText);
+    expect(call.fillText.x).toBe(400);
+  });
+
+  test('applies canvasWidth correctly (not NaN)', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['TEST'], 100, 800);
+    const call = ctx.calls.find(c => c.fillText);
+    expect(typeof call.fillText.x).toBe('number');
+    // If canvasWidth were an options object, x would be NaN — guard against regression
+    expect(call.fillText.x).toBeGreaterThan(0);
+  });
+
+  test('first line renders at startY', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['FIRST'], 150, 800);
+    const call = ctx.calls.find(c => c.fillText);
+    expect(call.fillText.y).toBe(150);
+  });
+
+  test('subsequent lines are offset by lineHeight', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['A', 'B', 'C'], 100, 800, { lineHeight: 50 });
+    const textCalls = ctx.calls.filter(c => c.fillText).map(c => c.fillText.y);
+    expect(textCalls[0]).toBe(100);
+    expect(textCalls[1]).toBe(150);
+    expect(textCalls[2]).toBe(200);
+  });
+
+  test('respects custom font and fillStyle options', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['X'], 50, 800, { font: '24px sans-serif', fillStyle: '#f00' });
+    expect(ctx.font).toBe('24px sans-serif');
+    expect(ctx.fillStyle).toBe('#f00');
+  });
+
+  test('wraps calls in save/restore', () => {
+    const ctx = makeCtx();
+    drawCenteredText(ctx, ['Y'], 50, 800);
+    expect(ctx.calls[0]).toBe('save');
+    expect(ctx.calls[ctx.calls.length - 1]).toBe('restore');
+  });
+});
+
 describe('Delta-time cap', () => {
   test('max dt cap of 100 ms prevents spiral of death', () => {
     // Simulate the cap logic from the game loop

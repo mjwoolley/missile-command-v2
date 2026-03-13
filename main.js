@@ -300,11 +300,13 @@ class Game {
     drawCenteredText(ctx,
       ['MISSILE COMMAND'],
       this.height / 2 - 60,
+      this.width,
       { font: '56px monospace', fillStyle: '#ff4444', lineHeight: 70 }
     );
     drawCenteredText(ctx,
       ['PRESS ENTER OR CLICK TO START'],
       this.height / 2 + 30,
+      this.width,
       { font: '20px monospace', fillStyle: '#aaa', lineHeight: 30 }
     );
   }
@@ -318,6 +320,7 @@ class Game {
     drawCenteredText(ctx,
       [`LEVEL ${this.level} COMPLETE`, `SCORE: ${this.score}`],
       this.height / 2 - 40,
+      this.width,
       { font: '36px monospace', fillStyle: '#ff0', lineHeight: 50 }
     );
   }
@@ -331,8 +334,21 @@ class Game {
     drawCenteredText(ctx,
       ['GAME OVER', `FINAL SCORE: ${this.score}`, 'PRESS ENTER / SPACE OR CLICK TO RESTART'],
       this.height / 2 - 60,
+      this.width,
       { font: '40px monospace', fillStyle: '#ff4444', lineHeight: 56 }
     );
+  }
+
+  // ── Cleanup ────────────────────────────────────────────────────────────────
+
+  /** Remove event listeners and cancel the animation loop. */
+  destroy() {
+    window.removeEventListener('keydown', this._boundKeyDown);
+    this.canvas.removeEventListener('click', this._boundClick);
+    if (this._rafId !== undefined) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = undefined;
+    }
   }
 
   // ── Loop ───────────────────────────────────────────────────────────────────
@@ -348,9 +364,9 @@ class Game {
       this.update(dt);
       this.render();
 
-      requestAnimationFrame(loop);
+      this._rafId = requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
+    this._rafId = requestAnimationFrame(loop);
   }
 }
 
