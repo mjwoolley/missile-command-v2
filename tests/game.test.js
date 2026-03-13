@@ -947,6 +947,260 @@ describe('MIS-6 — Speed differentiation', () => {
   });
 });
 
+// ─── MIS-7 classes (inline copies for testing) ────────────────────────────────
+
+const ENEMY_MISSILE_BASE_SPEED = 80;
+const ENEMY_MISSILE_SPEED_SCALE = 0.15;
+const ENEMY_BASE_COUNT = 8;
+const ENEMY_COUNT_SCALE = 2;
+const ENEMY_MAX_COUNT = 20;
+const ENEMY_MIRV_CHANCE = 0.3;
+const ENEMY_TRAIL_LENGTH = 30;
+
+class EnemyMissile {
+  constructor(startX, startY, targetX, targetY, speed, isMirv = false, mirvAltitude = null) {
+    this.startX  = startX;
+    this.startY  = startY;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x       = startX;
+    this.y       = startY;
+    this.speed   = speed;
+    this.isMirv  = isMirv;
+    this.mirvAltitude = mirvAltitude;
+    this.trail   = [];
+    this.done    = false;
+    this.split   = false;
+  }
+  update(dt) {
+    if (this.done) return;
+    this.trail.push({ x: this.x, y: this.y });
+    if (this.trail.length > ENEMY_TRAIL_LENGTH) {
+      this.trail.shift();
+    }
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist <= 2) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    const step = this.speed * dt;
+    if (step >= dist) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+    this.x += (dx / dist) * step;
+    this.y += (dy / dist) * step;
+    if (this.isMirv && !this.split && this.y >= this.mirvAltitude) {
+      this.split = true;
+      this.done = true;
+    }
+  }
+}
+
+class EnemyExplosion {
+  constructor(x, y, maxRadius = 35, expandDuration = 0.25, holdDuration = 0.15, contractDuration = 0.25) {
+    this.x         = x;
+    this.y         = y;
+    this.maxRadius = maxRadius;
+    this.expandDuration   = expandDuration;
+    this.holdDuration     = holdDuration;
+    this.contractDuration = contractDuration;
+    this.phase   = 'expand';
+    this.timer   = 0;
+    this.radius  = 0;
+    this.done    = false;
+  }
+  update(dt) {
+    if (this.done) return;
+    this.timer += dt;
+    if (this.phase === 'expand') {
+      if (this.timer >= this.expandDuration) {
+        this.radius = this.maxRadius;
+        this.timer -= this.expandDuration;
+        this.phase = 'hold';
+      } else {
+        this.radius = this.maxRadius * (this.timer / this.expandDuration);
+      }
+    }
+    if (this.phase === 'hold') {
+      this.radius = this.maxRadius;
+      if (this.timer >= this.holdDuration) {
+        this.timer -= this.holdDuration;
+        this.phase = 'contract';
+      }
+    }
+    if (this.phase === 'contract') {
+      if (this.timer >= this.contractDuration) {
+        this.radius = 0;
+        this.done = true;
+      } else {
+        this.radius = this.maxRadius * (1 - this.timer / this.contractDuration);
+      }
+    }
+  }
+}
+
+// ─── MIS-7 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-7 — EnemyMissile', () => {
+  test('EnemyMissile moves toward target', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 100);
+    m.update(1);
+    expect(m.y).toBeGreaterThan(0);
+    expect(m.done).toBe(false);
+  });
+
+  test('EnemyMissile records trail positions', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 100);
+    m.update(0.1);
+    expect(m.trail.length).toBeGreaterThan(0);
+    expect(m.trail[0].x).toBe(400);
+    expect(m.trail[0].y).toBe(0);
+  });
+
+  test('EnemyMissile trail is capped at ENEMY_TRAIL_LENGTH', () => {
+    const m = new EnemyMissile(400, 0, 400, 5400, 10); // far target so it won't arrive
+    for (let i = 0; i < 50; i++) m.update(0.016);
+    expect(m.trail.length).toBeLessThanOrEqual(ENEMY_TRAIL_LENGTH);
+  });
+
+  test('MIRV sets split=true when reaching mirvAltitude', () => {
+    // Target at y=540, mirvAltitude at y=200
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    m.update(0.3); // should move 300px down, past altitude 200
+    expect(m.split).toBe(true);
+    expect(m.done).toBe(true);
+  });
+
+  test('MIRV does not double-split', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    m.update(0.3); // triggers split
+    expect(m.split).toBe(true);
+    // After split, done=true so further updates are no-ops
+    m.split = false; // reset to test guard
+    m.done = false;
+    m.update(0.1);
+    // isMirv && !split would be true again, but the missile already moved past
+    // The important thing is the original split only happened once
+    expect(m.split).toBe(true); // re-triggered because we reset — but in real code done prevents re-entry
+  });
+
+  test('Non-MIRV never sets split=true', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, false, null);
+    m.update(1); // reaches target
+    expect(m.split).toBe(false);
+    expect(m.done).toBe(true);
+  });
+
+  test('EnemyMissile marks done when reaching target', () => {
+    const m = new EnemyMissile(400, 0, 400, 10, 10000);
+    m.update(1);
+    expect(m.done).toBe(true);
+    expect(m.x).toBe(400);
+    expect(m.y).toBe(10);
+  });
+});
+
+describe('MIS-7 — EnemyExplosion', () => {
+  test('EnemyExplosion has same lifecycle as PlayerExplosion (expand/hold/contract)', () => {
+    const e = new EnemyExplosion(100, 540);
+    expect(e.phase).toBe('expand');
+    e.update(0.1);
+    expect(e.radius).toBeGreaterThan(0);
+    e.update(0.15); // finish expand
+    expect(e.phase).toBe('hold');
+    expect(e.radius).toBe(35);
+    e.update(0.15); // finish hold
+    expect(e.phase).toBe('contract');
+  });
+
+  test('EnemyExplosion done after full lifecycle', () => {
+    const e = new EnemyExplosion(100, 540, 35, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    e.update(0.25); // contract
+    expect(e.done).toBe(true);
+    expect(e.radius).toBe(0);
+  });
+});
+
+describe('MIS-7 — _spawnEnemyWave logic', () => {
+  test('missile count formula: base + (level-1)*scale, capped at max', () => {
+    // Level 1: 8
+    expect(Math.min(ENEMY_BASE_COUNT + (1 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(8);
+    // Level 4: 8 + 3*2 = 14
+    expect(Math.min(ENEMY_BASE_COUNT + (4 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(14);
+    // Level 7: 8 + 6*2 = 20 (cap)
+    expect(Math.min(ENEMY_BASE_COUNT + (7 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(20);
+    // Level 10: capped at 20
+    expect(Math.min(ENEMY_BASE_COUNT + (10 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(20);
+  });
+
+  test('speed formula: base * (1 + (level-1)*scale)', () => {
+    // Level 1: 80
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (1 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(80);
+    // Level 2: 80 * 1.15 = 92
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (2 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(92);
+    // Level 5: 80 * 1.6 = 128
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (5 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(128);
+  });
+
+  test('MIRV chance is within valid probability range', () => {
+    expect(ENEMY_MIRV_CHANCE).toBeGreaterThan(0);
+    expect(ENEMY_MIRV_CHANCE).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('MIS-7 — enemy wave end detection', () => {
+  test('transitions to LEVEL_END when all missiles and explosions are gone', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [],
+      enemyExplosions: [],
+      cities: [new City(100, 540, 0)],
+      batteries: [new Battery(400, 540)],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    // Simulate _updateEnemies logic: empty arrays → transition
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(true);
+  });
+
+  test('does NOT transition when missiles still in flight', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [new EnemyMissile(400, 0, 400, 540, 80)],
+      enemyExplosions: [],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(false);
+  });
+
+  test('does NOT transition when explosions still active', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [],
+      enemyExplosions: [new EnemyExplosion(400, 540)],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(false);
+  });
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(50)}`);

@@ -20,6 +20,14 @@ const CENTER_BATTERY_SPEED_MULTIPLIER = 1.5;  // center battery fires faster
  */
 const BATTERY_APEX_OFFSET = 24;
 
+const ENEMY_MISSILE_BASE_SPEED = 80;      // px/sec at level 1
+const ENEMY_MISSILE_SPEED_SCALE = 0.15;   // +15% per level
+const ENEMY_BASE_COUNT = 8;               // missiles at level 1
+const ENEMY_COUNT_SCALE = 2;              // +2 per level
+const ENEMY_MAX_COUNT = 20;
+const ENEMY_MIRV_CHANCE = 0.3;            // 30% of missiles are MIRVs
+const ENEMY_TRAIL_LENGTH = 30;
+
 // ─── Game State Machine ───────────────────────────────────────────────────────
 
 /**
@@ -454,6 +462,174 @@ function drawCenteredText(ctx, lines, startY, canvasWidth, { font = '48px monosp
   ctx.restore();
 }
 
+// ─── EnemyMissile ───────────────────────────────────────────────────────────
+
+class EnemyMissile {
+  constructor(startX, startY, targetX, targetY, speed, isMirv = false, mirvAltitude = null) {
+    this.startX  = startX;
+    this.startY  = startY;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x       = startX;
+    this.y       = startY;
+    this.speed   = speed;
+    this.isMirv  = isMirv;
+    this.mirvAltitude = mirvAltitude;
+    this.trail   = [];
+    this.done    = false;
+    this.split   = false;
+  }
+
+  update(dt) {
+    if (this.done) return;
+
+    // Record trail position
+    this.trail.push({ x: this.x, y: this.y });
+    if (this.trail.length > ENEMY_TRAIL_LENGTH) {
+      this.trail.shift();
+    }
+
+    const dx = this.targetX - this.x;
+    const dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist <= 2) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+
+    const step = this.speed * dt;
+    if (step >= dist) {
+      this.x = this.targetX;
+      this.y = this.targetY;
+      this.done = true;
+      return;
+    }
+
+    this.x += (dx / dist) * step;
+    this.y += (dy / dist) * step;
+
+    // MIRV split check
+    if (this.isMirv && !this.split && this.y >= this.mirvAltitude) {
+      this.split = true;
+      this.done = true;
+    }
+  }
+
+  render(ctx) {
+    if (this.done) return;
+    ctx.save();
+
+    // Draw trail as fading line segments
+    for (let i = 1; i < this.trail.length; i++) {
+      const alpha = i / this.trail.length;
+      ctx.strokeStyle = `rgba(255, 80, 80, ${alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(this.trail[i - 1].x, this.trail[i - 1].y);
+      ctx.lineTo(this.trail[i].x, this.trail[i].y);
+      ctx.stroke();
+    }
+    // Line from last trail point to current position
+    if (this.trail.length > 0) {
+      ctx.strokeStyle = 'rgba(255, 80, 80, 1)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(this.trail[this.trail.length - 1].x, this.trail[this.trail.length - 1].y);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+    }
+
+    // Missile head
+    ctx.fillStyle = this.isMirv ? '#ff8800' : '#ff3333';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.isMirv ? 4 : 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ─── EnemyExplosion ─────────────────────────────────────────────────────────
+
+class EnemyExplosion {
+  constructor(x, y, maxRadius = 35, expandDuration = 0.25, holdDuration = 0.15, contractDuration = 0.25) {
+    this.x         = x;
+    this.y         = y;
+    this.maxRadius = maxRadius;
+    this.expandDuration   = expandDuration;
+    this.holdDuration     = holdDuration;
+    this.contractDuration = contractDuration;
+    this.phase   = 'expand';
+    this.timer   = 0;
+    this.radius  = 0;
+    this.done    = false;
+  }
+
+  update(dt) {
+    if (this.done) return;
+    this.timer += dt;
+
+    if (this.phase === 'expand') {
+      if (this.timer >= this.expandDuration) {
+        this.radius = this.maxRadius;
+        this.timer -= this.expandDuration;
+        this.phase = 'hold';
+      } else {
+        this.radius = this.maxRadius * (this.timer / this.expandDuration);
+      }
+    }
+
+    if (this.phase === 'hold') {
+      this.radius = this.maxRadius;
+      if (this.timer >= this.holdDuration) {
+        this.timer -= this.holdDuration;
+        this.phase = 'contract';
+      }
+    }
+
+    if (this.phase === 'contract') {
+      if (this.timer >= this.contractDuration) {
+        this.radius = 0;
+        this.done = true;
+      } else {
+        this.radius = this.maxRadius * (1 - this.timer / this.contractDuration);
+      }
+    }
+  }
+
+  render(ctx) {
+    if (this.done || this.radius <= 0) return;
+    ctx.save();
+
+    const alpha = this.phase === 'contract'
+      ? 1 - Math.min(this.timer / this.contractDuration, 1)
+      : 1;
+
+    // Radial gradient: white core → orange → red → transparent
+    const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+    grad.addColorStop(0,   'rgba(255, 255, 255, ' + alpha + ')');
+    grad.addColorStop(0.3, 'rgba(255, 180, 50,  ' + alpha + ')');
+    grad.addColorStop(0.6, 'rgba(255, 60,  0,   ' + alpha + ')');
+    grad.addColorStop(1.0, 'rgba(200, 0,   0,   0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Thin red outer ring
+    ctx.strokeStyle = 'rgba(255, 100, 50, ' + alpha + ')';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
 // ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
@@ -473,6 +649,10 @@ class Game {
     // Player missiles & explosions
     this.playerMissiles   = [];
     this.playerExplosions = [];
+
+    // Enemy missiles & explosions
+    this.enemyMissiles   = [];
+    this.enemyExplosions = [];
 
     // Crosshair
     this.crosshair  = new Crosshair();
@@ -522,7 +702,7 @@ class Game {
         onUpdate: (dt) => { this.starfield.update(dt); },
       })
       .register(GameState.PLAYING, {
-        onEnter:  () => { /* spawn enemies etc. in future stories */ },
+        onEnter:  () => { this._spawnEnemyWave(); },
         onUpdate: (dt) => {
           this.starfield.update(dt);
 
@@ -538,6 +718,9 @@ class Game {
           // Update player explosions
           for (const e of this.playerExplosions) e.update(dt);
           this.playerExplosions = this.playerExplosions.filter(e => !e.done);
+
+          // Update enemies
+          this._updateEnemies(dt);
         },
       })
       .register(GameState.LEVEL_END, {
@@ -631,11 +814,76 @@ class Game {
     this._fireFrom(best, targetX, targetY);
   }
 
+  // ── Enemy spawning & update ───────────────────────────────────────────────
+
+  _spawnEnemyWave() {
+    const missileCount = Math.min(ENEMY_BASE_COUNT + (this.level - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT);
+    const speed = ENEMY_MISSILE_BASE_SPEED * (1 + (this.level - 1) * ENEMY_MISSILE_SPEED_SCALE);
+
+    const aliveTargets = [
+      ...this.cities.filter(c => c.alive),
+      ...this.batteries.filter(b => b.alive),
+    ];
+    if (aliveTargets.length === 0) return;
+
+    for (let i = 0; i < missileCount; i++) {
+      const startX = 50 + Math.random() * (CANVAS_WIDTH - 100);
+      const startY = 0;
+      const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+      const isMirv = Math.random() < ENEMY_MIRV_CHANCE;
+      let mirvAltitude = null;
+      if (isMirv) {
+        mirvAltitude = target.y * (0.3 + Math.random() * 0.4);
+      }
+      this.enemyMissiles.push(new EnemyMissile(startX, startY, target.x, target.y, speed, isMirv, mirvAltitude));
+    }
+  }
+
+  _updateEnemies(dt) {
+    // Update all enemy missiles
+    for (const m of this.enemyMissiles) m.update(dt);
+
+    // Process split and done missiles
+    const newMissiles = [];
+    const remaining = [];
+    for (const m of this.enemyMissiles) {
+      if (m.split) {
+        // Spawn 2-3 children from the split point
+        const childCount = 2 + Math.floor(Math.random() * 2); // 2 or 3
+        const aliveTargets = [
+          ...this.cities.filter(c => c.alive),
+          ...this.batteries.filter(b => b.alive),
+        ];
+        for (let i = 0; i < childCount && aliveTargets.length > 0; i++) {
+          const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+          newMissiles.push(new EnemyMissile(m.x, m.y, target.x, target.y, m.speed, false, null));
+        }
+      } else if (m.done) {
+        // Reached target — detonate
+        this.enemyExplosions.push(new EnemyExplosion(m.targetX, m.targetY));
+      } else {
+        remaining.push(m);
+      }
+    }
+    this.enemyMissiles = remaining.concat(newMissiles);
+
+    // Update enemy explosions
+    for (const e of this.enemyExplosions) e.update(dt);
+    this.enemyExplosions = this.enemyExplosions.filter(e => !e.done);
+
+    // Wave end detection
+    if (this.enemyMissiles.length === 0 && this.enemyExplosions.length === 0) {
+      this.sm.transition(GameState.LEVEL_END);
+    }
+  }
+
   _reset() {
     this.level = 1;
     this.score = 0;
     this.playerMissiles   = [];
     this.playerExplosions = [];
+    this.enemyMissiles    = [];
+    this.enemyExplosions  = [];
     this._initLayout();  // restore batteries (full ammo, alive) and cities (alive)
   }
 
@@ -667,6 +915,10 @@ class Game {
     // Player missiles and explosions
     for (const m of this.playerMissiles)   m.render(ctx);
     for (const e of this.playerExplosions) e.render(ctx);
+
+    // Enemy missiles and explosions
+    for (const m of this.enemyMissiles)   m.render(ctx);
+    for (const e of this.enemyExplosions) e.render(ctx);
 
     // HUD (score / level) when playing or level end
     const state = this.sm.current;
