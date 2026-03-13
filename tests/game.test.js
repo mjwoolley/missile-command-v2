@@ -103,6 +103,10 @@ const CANVAS_HEIGHT = 600;
 const GROUND_HEIGHT = 60;
 const STAR_COUNT    = 150;
 
+const BATTERY_MISSILE_COUNT = 10;
+const PLAYER_MISSILE_SPEED  = 300;
+const BATTERY_APEX_OFFSET   = 24;
+
 class Starfield {
   constructor(count, width, height) {
     this.stars = Array.from({ length: count }, () => ({
@@ -161,10 +165,49 @@ class Battery {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.missiles = 10;
+    this.missiles = BATTERY_MISSILE_COUNT;
     this.alive = true;
   }
   destroy() { this.alive = false; }
+}
+
+/**
+ * Minimal _initLayout() helper — mirrors the Game method for unit-testing _reset().
+ * Creates fresh batteries and cities in classic 9-slot positions.
+ */
+function makeLayout(width, height) {
+  const slotWidth    = width / 9;
+  const groundY      = height - GROUND_HEIGHT;
+  const batterySlots = [0, 3, 6];
+  const citySlots    = [1, 2, 4, 5, 7, 8];
+  const batteries = batterySlots.map(i => new Battery(i * slotWidth + slotWidth / 2, groundY));
+  const cities    = citySlots.map((i, idx) => new City(i * slotWidth + slotWidth / 2, groundY, idx));
+  return { batteries, cities };
+}
+
+/** Minimal _reset() logic for unit-testing without DOM. */
+function makeResetState() {
+  const state = {
+    level: 99,
+    score: 12345,
+    playerMissiles:   [{}],
+    playerExplosions: [{}],
+    batteries: [],
+    cities:    [],
+  };
+  state._initLayout = function () {
+    const layout = makeLayout(CANVAS_WIDTH, CANVAS_HEIGHT);
+    this.batteries = layout.batteries;
+    this.cities    = layout.cities;
+  };
+  state._reset = function () {
+    this.level = 1;
+    this.score = 0;
+    this.playerMissiles   = [];
+    this.playerExplosions = [];
+    this._initLayout();
+  };
+  return state;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -441,10 +484,10 @@ describe('City', () => {
 });
 
 describe('Battery', () => {
-  test('starts alive with 10 missiles', () => {
+  test(`starts alive with ${BATTERY_MISSILE_COUNT} missiles`, () => {
     const b = new Battery(200, 540);
     expect(b.alive).toBe(true);
-    expect(b.missiles).toBe(10);
+    expect(b.missiles).toBe(BATTERY_MISSILE_COUNT);
   });
 
   test('has correct position', () => {
@@ -564,6 +607,11 @@ describe('MIS-5 — Crosshair', () => {
 });
 
 describe('MIS-5 — PlayerMissile', () => {
+  test('default speed is PLAYER_MISSILE_SPEED', () => {
+    const m = new PlayerMissile(0, 0, 1000, 0);
+    expect(m.speed).toBe(PLAYER_MISSILE_SPEED);
+  });
+
   test('moves toward target', () => {
     const m = new PlayerMissile(0, 0, 300, 0, 100);
     m.update(1); // 1 second at 100 px/sec
@@ -668,6 +716,106 @@ describe('MIS-5 — _fireNearest logic', () => {
     batteries[1].missiles = 0;
     batteries[2].destroy();
     expect(fireNearest(batteries, 400)).toBe(-1);
+  });
+});
+
+describe('MIS-5 — _reset() restores batteries and cities', () => {
+  test('resets level and score to initial values', () => {
+    const state = makeResetState();
+    state._reset();
+    expect(state.level).toBe(1);
+    expect(state.score).toBe(0);
+  });
+
+  test('clears in-flight missiles and explosions', () => {
+    const state = makeResetState();
+    state._reset();
+    expect(state.playerMissiles).toHaveLength(0);
+    expect(state.playerExplosions).toHaveLength(0);
+  });
+
+  test('restores exactly 3 batteries, all alive', () => {
+    const state = makeResetState();
+    // Destroy everything first
+    state._initLayout();
+    state.batteries.forEach(b => b.destroy());
+    state.batteries.forEach(b => { b.missiles = 0; });
+    // Now reset
+    state._reset();
+    expect(state.batteries).toHaveLength(3);
+    for (const b of state.batteries) {
+      expect(b.alive).toBe(true);
+    }
+  });
+
+  test('restores batteries with full ammo after reset', () => {
+    const state = makeResetState();
+    state._initLayout();
+    state.batteries.forEach(b => { b.missiles = 0; });
+    state._reset();
+    for (const b of state.batteries) {
+      expect(b.missiles).toBe(BATTERY_MISSILE_COUNT);
+    }
+  });
+
+  test('restores exactly 6 cities, all alive', () => {
+    const state = makeResetState();
+    state._initLayout();
+    state.cities.forEach(c => c.destroy());
+    state._reset();
+    expect(state.cities).toHaveLength(6);
+    for (const c of state.cities) {
+      expect(c.alive).toBe(true);
+    }
+  });
+});
+
+describe('MIS-5 — _mouseReady guard (no firing before first mousemove)', () => {
+  // Replicate the guard logic inline
+  function makeInputState() {
+    return {
+      _mouseX:     0,
+      _mouseY:     0,
+      _mouseReady: false,
+      fired:       [],
+      _fireFrom(idx, x, y) { this.fired.push({ idx, x, y }); },
+      _onKeyDown(key) {
+        // mirrors Game._onKeyDown firing block
+        if (!this._mouseReady) return;
+        if (key === '1') this._fireFrom(0, this._mouseX, this._mouseY);
+        if (key === '2') this._fireFrom(1, this._mouseX, this._mouseY);
+        if (key === '3') this._fireFrom(2, this._mouseX, this._mouseY);
+      },
+      _onMouseMove(x, y) {
+        this._mouseX     = x;
+        this._mouseY     = y;
+        this._mouseReady = true;
+      },
+    };
+  }
+
+  test('pressing 1/2/3 before mousemove does NOT fire', () => {
+    const s = makeInputState();
+    s._onKeyDown('1');
+    s._onKeyDown('2');
+    s._onKeyDown('3');
+    expect(s.fired).toHaveLength(0);
+  });
+
+  test('pressing 1/2/3 AFTER mousemove does fire', () => {
+    const s = makeInputState();
+    s._onMouseMove(400, 300);
+    s._onKeyDown('1');
+    expect(s.fired).toHaveLength(1);
+    expect(s.fired[0].idx).toBe(0);
+    expect(s.fired[0].x).toBe(400);
+  });
+
+  test('_mouseReady is false at construction, true after first move', () => {
+    const s = makeInputState();
+    expect(s._mouseReady).toBe(false);
+    s._onMouseMove(100, 200);
+    expect(s._mouseReady).toBe(true);
   });
 });
 

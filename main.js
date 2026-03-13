@@ -11,6 +11,14 @@ const CANVAS_HEIGHT = 600;
 const GROUND_HEIGHT  = 60;   // px from bottom
 const STAR_COUNT     = 150;
 
+const BATTERY_MISSILE_COUNT = 10;   // starting missiles per battery
+const PLAYER_MISSILE_SPEED  = 300;  // px/sec
+/**
+ * Vertical distance from battery base-y to the apex of the triangle
+ * (used both in Battery._renderAlive and Game._fireFrom to keep them in sync).
+ */
+const BATTERY_APEX_OFFSET = 24;
+
 // ─── Game State Machine ───────────────────────────────────────────────────────
 
 /**
@@ -208,7 +216,7 @@ class Battery {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.missiles = 10;
+    this.missiles = BATTERY_MISSILE_COUNT;
     this.alive = true;
   }
 
@@ -229,7 +237,7 @@ class Battery {
     // Dome / triangle pointing up
     ctx.fillStyle = '#ddd';
     ctx.beginPath();
-    ctx.moveTo(this.x, this.y - 24);      // apex
+    ctx.moveTo(this.x, this.y - BATTERY_APEX_OFFSET);  // apex
     ctx.lineTo(this.x - 18, this.y);       // bottom-left
     ctx.lineTo(this.x + 18, this.y);       // bottom-right
     ctx.closePath();
@@ -296,7 +304,7 @@ class PlayerMissile {
    * @param {number} targetY
    * @param {number} speed  px/sec
    */
-  constructor(startX, startY, targetX, targetY, speed = 300) {
+  constructor(startX, startY, targetX, targetY, speed = PLAYER_MISSILE_SPEED) {
     this.startX  = startX;
     this.startY  = startY;
     this.targetX = targetX;
@@ -347,8 +355,12 @@ class PlayerExplosion {
   /**
    * @param {number} x
    * @param {number} y
-   * @param {number} maxRadius
-   * @param {number} duration  seconds
+   * @param {number} maxRadius  px — how large the blast grows (default: 40)
+   * @param {number} duration   seconds — how long the blast lasts (default: 0.5)
+   *
+   * Defaults are tuned to feel comparable to the classic arcade blast:
+   * 40 px radius covers roughly one enemy-missile path width; 0.5 s is
+   * long enough to intercept slow missiles without obscuring the playfield.
    */
   constructor(x, y, maxRadius = 40, duration = 0.5) {
     this.x         = x;
@@ -412,31 +424,19 @@ class Game {
     this.starfield = new Starfield(STAR_COUNT, this.width, this.height);
     this.terrain   = new Terrain(this.width, this.height);
 
-    // Classic layout: 9 slots across the bottom
-    // Batteries at slots 0, 3, 6 — Cities at slots 1, 2, 4, 5, 7, 8
-    const slotWidth = this.width / 9;
-    const groundY = CANVAS_HEIGHT - GROUND_HEIGHT;
-    const batterySlots = [0, 3, 6];
-    const citySlots    = [1, 2, 4, 5, 7, 8];
-
-    this.batteries = batterySlots.map(i =>
-      new Battery(i * slotWidth + slotWidth / 2, groundY)
-    );
-    this.cities = citySlots.map((i, idx) =>
-      new City(i * slotWidth + slotWidth / 2, groundY, idx)
-    );
-
-    this.level     = 1;
-    this.score     = 0;
+    this.level = 1;
+    this.score = 0;
+    this._initLayout();
 
     // Player missiles & explosions
     this.playerMissiles   = [];
     this.playerExplosions = [];
 
     // Crosshair
-    this.crosshair = new Crosshair();
-    this._mouseX = 0;
-    this._mouseY = 0;
+    this.crosshair  = new Crosshair();
+    this._mouseX     = 0;
+    this._mouseY     = 0;
+    this._mouseReady = false;  // true once the player has moved the mouse over the canvas
     canvas.style.cursor = 'none';
 
     // Timing
@@ -454,6 +454,23 @@ class Game {
     this.sm = new StateMachine(GameState.TITLE);
     this._registerStates();
     this.sm.start();
+  }
+
+  /** (Re-)create batteries and cities in their classic slot positions. */
+  _initLayout() {
+    // Classic layout: 9 slots across the bottom
+    // Batteries at slots 0, 3, 6 — Cities at slots 1, 2, 4, 5, 7, 8
+    const slotWidth    = this.width / 9;
+    const groundY      = CANVAS_HEIGHT - GROUND_HEIGHT;
+    const batterySlots = [0, 3, 6];
+    const citySlots    = [1, 2, 4, 5, 7, 8];
+
+    this.batteries = batterySlots.map(i =>
+      new Battery(i * slotWidth + slotWidth / 2, groundY)
+    );
+    this.cities = citySlots.map((i, idx) =>
+      new City(i * slotWidth + slotWidth / 2, groundY, idx)
+    );
   }
 
   _registerStates() {
@@ -506,7 +523,7 @@ class Game {
       if (state === GameState.TITLE)     this.sm.transition(GameState.PLAYING);
       if (state === GameState.GAME_OVER) { this._reset(); this.sm.transition(GameState.TITLE); }
     }
-    if (state === GameState.PLAYING) {
+    if (state === GameState.PLAYING && this._mouseReady) {
       if (e.key === '1') this._fireFrom(0, this._mouseX, this._mouseY);
       if (e.key === '2') this._fireFrom(1, this._mouseX, this._mouseY);
       if (e.key === '3') this._fireFrom(2, this._mouseX, this._mouseY);
@@ -531,8 +548,9 @@ class Game {
     const rect = this.canvas.getBoundingClientRect();
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
-    this._mouseX = (e.clientX - rect.left) * scaleX;
-    this._mouseY = (e.clientY - rect.top) * scaleY;
+    this._mouseX     = (e.clientX - rect.left) * scaleX;
+    this._mouseY     = (e.clientY - rect.top) * scaleY;
+    this._mouseReady = true;
   }
 
   // ── Firing ────────────────────────────────────────────────────────────────
@@ -544,7 +562,7 @@ class Game {
     if (!battery.alive || battery.missiles <= 0) return;
     battery.missiles--;
     this.playerMissiles.push(
-      new PlayerMissile(battery.x, battery.y - 24, targetX, targetY)
+      new PlayerMissile(battery.x, battery.y - BATTERY_APEX_OFFSET, targetX, targetY)
     );
   }
 
@@ -555,6 +573,9 @@ class Game {
     for (let i = 0; i < this.batteries.length; i++) {
       const b = this.batteries[i];
       if (!b.alive || b.missiles <= 0) continue;
+      // Horizontal-only distance is correct here: all three batteries share the
+      // same Y (the ground strip), so horizontal proximity is a perfect proxy
+      // for Euclidean distance between batteries.
       const d = Math.abs(b.x - targetX);
       if (d < bestDist) {
         bestDist = d;
@@ -570,6 +591,7 @@ class Game {
     this.score = 0;
     this.playerMissiles   = [];
     this.playerExplosions = [];
+    this._initLayout();  // restore batteries (full ammo, alive) and cities (alive)
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────
