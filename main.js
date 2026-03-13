@@ -13,6 +13,7 @@ const STAR_COUNT     = 150;
 
 const BATTERY_MISSILE_COUNT = 10;   // starting missiles per battery
 const PLAYER_MISSILE_SPEED  = 300;  // px/sec
+const CENTER_BATTERY_SPEED_MULTIPLIER = 1.5;  // center battery fires faster
 /**
  * Vertical distance from battery base-y to the apex of the triangle
  * (used both in Battery._renderAlive and Game._fireFrom to keep them in sync).
@@ -353,45 +354,86 @@ class PlayerMissile {
 
 class PlayerExplosion {
   /**
+   * Expand → hold → contract fireball lifecycle.
    * @param {number} x
    * @param {number} y
-   * @param {number} maxRadius  px — how large the blast grows (default: 40)
-   * @param {number} duration   seconds — how long the blast lasts (default: 0.5)
-   *
-   * Defaults are tuned to feel comparable to the classic arcade blast:
-   * 40 px radius covers roughly one enemy-missile path width; 0.5 s is
-   * long enough to intercept slow missiles without obscuring the playfield.
+   * @param {number} maxRadius       px — max blast radius (default: 40)
+   * @param {number} expandDuration  seconds — expand phase (default: 0.25)
+   * @param {number} holdDuration    seconds — hold phase (default: 0.15)
+   * @param {number} contractDuration seconds — contract phase (default: 0.25)
    */
-  constructor(x, y, maxRadius = 40, duration = 0.5) {
+  constructor(x, y, maxRadius = 40, expandDuration = 0.25, holdDuration = 0.15, contractDuration = 0.25) {
     this.x         = x;
     this.y         = y;
     this.maxRadius = maxRadius;
-    this.duration  = duration;
-    this.radius    = 0;
-    this.alpha     = 1;
-    this.done      = false;
-    this.timer     = 0;
+    this.expandDuration   = expandDuration;
+    this.holdDuration     = holdDuration;
+    this.contractDuration = contractDuration;
+    this.phase   = 'expand';
+    this.timer   = 0;
+    this.radius  = 0;
+    this.done    = false;
   }
 
   update(dt) {
     if (this.done) return;
     this.timer += dt;
-    const progress = Math.min(this.timer / this.duration, 1);
-    this.radius = this.maxRadius * progress;
-    this.alpha  = 1 - progress;
-    if (this.timer >= this.duration) {
-      this.done = true;
+
+    if (this.phase === 'expand') {
+      if (this.timer >= this.expandDuration) {
+        this.radius = this.maxRadius;
+        this.timer -= this.expandDuration;
+        this.phase = 'hold';
+      } else {
+        this.radius = this.maxRadius * (this.timer / this.expandDuration);
+      }
+    }
+
+    if (this.phase === 'hold') {
+      this.radius = this.maxRadius;
+      if (this.timer >= this.holdDuration) {
+        this.timer -= this.holdDuration;
+        this.phase = 'contract';
+      }
+    }
+
+    if (this.phase === 'contract') {
+      if (this.timer >= this.contractDuration) {
+        this.radius = 0;
+        this.done = true;
+      } else {
+        this.radius = this.maxRadius * (1 - this.timer / this.contractDuration);
+      }
     }
   }
 
   render(ctx) {
-    if (this.done) return;
+    if (this.done || this.radius <= 0) return;
     ctx.save();
-    ctx.strokeStyle = `rgba(255,200,100,${this.alpha})`;
-    ctx.lineWidth = 2;
+
+    // Alpha: full during expand/hold, fades during contract
+    const alpha = this.phase === 'contract'
+      ? 1 - Math.min(this.timer / this.contractDuration, 1)
+      : 1;
+
+    // Radial gradient fill: white core → blue-white → orange → transparent red edge
+    const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+    grad.addColorStop(0,   'rgba(255, 255, 255, ' + alpha + ')');
+    grad.addColorStop(0.3, 'rgba(200, 230, 255, ' + alpha + ')');
+    grad.addColorStop(0.6, 'rgba(255, 140, 20,  ' + alpha + ')');
+    grad.addColorStop(1.0, 'rgba(255, 60,  0,   0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Thin white outer ring
+    ctx.strokeStyle = 'rgba(255, 255, 255, ' + alpha + ')';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.stroke();
+
     ctx.restore();
   }
 }
@@ -561,8 +603,11 @@ class Game {
     const battery = this.batteries[batteryIndex];
     if (!battery.alive || battery.missiles <= 0) return;
     battery.missiles--;
+    const speed = batteryIndex === 1
+      ? PLAYER_MISSILE_SPEED * CENTER_BATTERY_SPEED_MULTIPLIER
+      : PLAYER_MISSILE_SPEED;
     this.playerMissiles.push(
-      new PlayerMissile(battery.x, battery.y - BATTERY_APEX_OFFSET, targetX, targetY)
+      new PlayerMissile(battery.x, battery.y - BATTERY_APEX_OFFSET, targetX, targetY, speed)
     );
   }
 
