@@ -143,6 +143,30 @@ class Terrain {
   }
 }
 
+// ─── City & Battery (inline copies for testing) ──────────────────────────────
+
+const CITY_COLORS = ['#00ffff', '#ffff00', '#ff00ff', '#00ff00', '#ff8800', '#88ff88'];
+
+class City {
+  constructor(x, y, colorIndex) {
+    this.x = x;
+    this.y = y;
+    this.alive = true;
+    this.color = CITY_COLORS[colorIndex % CITY_COLORS.length];
+  }
+  destroy() { this.alive = false; }
+}
+
+class Battery {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.missiles = 10;
+    this.alive = true;
+  }
+  destroy() { this.alive = false; }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('GameState', () => {
@@ -387,6 +411,58 @@ describe('Delta-time cap', () => {
     const rawDelta = 5000; // 5 seconds (tab was backgrounded)
     const dt = Math.min(rawDelta / 1000, 0.1);
     expect(dt).toBeLessThanOrEqual(0.1);
+  });
+});
+
+describe('City', () => {
+  test('starts alive with correct position', () => {
+    const c = new City(100, 540, 0);
+    expect(c.alive).toBe(true);
+    expect(c.x).toBe(100);
+    expect(c.y).toBe(540);
+  });
+
+  test('has a color from CITY_COLORS', () => {
+    const c = new City(100, 540, 2);
+    expect(c.color).toBe('#ff00ff');
+  });
+
+  test('destroy() sets alive to false', () => {
+    const c = new City(100, 540, 0);
+    c.destroy();
+    expect(c.alive).toBe(false);
+  });
+
+  test('color cycles with colorIndex', () => {
+    const c0 = new City(0, 0, 0);
+    const c6 = new City(0, 0, 6); // wraps around
+    expect(c0.color).toBe(c6.color);
+  });
+});
+
+describe('Battery', () => {
+  test('starts alive with 10 missiles', () => {
+    const b = new Battery(200, 540);
+    expect(b.alive).toBe(true);
+    expect(b.missiles).toBe(10);
+  });
+
+  test('has correct position', () => {
+    const b = new Battery(200, 540);
+    expect(b.x).toBe(200);
+    expect(b.y).toBe(540);
+  });
+
+  test('destroy() sets alive to false', () => {
+    const b = new Battery(200, 540);
+    b.destroy();
+    expect(b.alive).toBe(false);
+  });
+
+  test('missiles count can be decremented', () => {
+    const b = new Battery(200, 540);
+    b.missiles--;
+    expect(b.missiles).toBe(9);
   });
 });
 
