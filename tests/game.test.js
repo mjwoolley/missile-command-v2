@@ -1354,6 +1354,33 @@ describe('MIS-8 — Collision Detection', () => {
     expect(state.enemyExplosions[1].isChain).toBe(true);
   });
 
+  test("empty cities array does NOT trigger game over", () => {
+    const state = makeCollisionState({ cities: [] });
+    const result = checkCollisions(state);
+    expect(result.gameOver).toBe(false);
+  });
+
+  test("missile destroyed by player explosion is not double-scored by enemy explosion", () => {
+    const playerExplosion = new PlayerExplosion(100, 100, 40);
+    playerExplosion.update(0.25); // radius = 40
+
+    const enemyExplosion = new EnemyExplosion(100, 100, 40); // same position
+    enemyExplosion.update(0.25); // radius = 40
+
+    const missile = new EnemyMissile(110, 100, 110, 540, 80); // within both radii
+
+    const state = makeCollisionState({
+      playerExplosions: [playerExplosion],
+      enemyExplosions:  [enemyExplosion],
+      enemyMissiles:    [missile],
+    });
+
+    const result = checkCollisions(state);
+    // Missile should be hit only once — score must be exactly 25, not 50
+    expect(missile.done).toBe(true);
+    expect(result.score).toBe(POINTS_PER_MISSILE); // 25, not 50
+  });
+
   test('POINTS_PER_MISSILE is 25', () => {
     expect(POINTS_PER_MISSILE).toBe(25);
   });

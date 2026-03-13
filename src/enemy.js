@@ -119,6 +119,7 @@ export class EnemyExplosion {
     this.timer            = 0;
     this.radius           = 0;
     this.done             = false;
+    this.isChain          = false;
   }
 
   update(dt) {

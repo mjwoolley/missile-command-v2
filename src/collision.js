@@ -27,7 +27,8 @@ export function checkCollisions(state) {
   // 1. Player explosions vs enemy missiles
   const newChainExplosions = [];
   for (const missile of enemyMissiles) {
-    if (missile.done || missile.split) continue;
+    // missile.split is always set with missile.done; check done only
+    if (missile.done) continue;
     for (const explosion of playerExplosions) {
       if (explosion.done || explosion.radius <= 0) continue;
       const dx = missile.x - explosion.x;
@@ -48,7 +49,8 @@ export function checkCollisions(state) {
   for (const explosion of enemyExplosions) {
     if (explosion.done || explosion.radius <= 0) continue;
     for (const missile of enemyMissiles) {
-      if (missile.done || missile.split) continue;
+      // missile.split is always set with missile.done; check done only
+      if (missile.done) continue;
       const dx = missile.x - explosion.x;
       const dy = missile.y - explosion.y;
       if (dx * dx + dy * dy <= explosion.radius * explosion.radius) {
@@ -60,6 +62,9 @@ export function checkCollisions(state) {
       }
     }
   }
+
+  // NOTE: newChainExplosions from section 1 are added AFTER section 2 runs intentionally.
+  // This prevents same-frame infinite cascade: new chains only resolve from the next frame onward.
 
   // Add chain explosions to the main array
   for (const ce of newChainExplosions) {
@@ -88,7 +93,7 @@ export function checkCollisions(state) {
   }
 
   // 4. Game over: all cities destroyed
-  const gameOver = cities.every(c => !c.alive);
+  const gameOver = cities.length > 0 && cities.every(c => !c.alive);
 
   return { score, gameOver };
 }
