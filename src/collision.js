@@ -44,8 +44,8 @@ export function checkCollisions(state) {
     }
   }
 
-  // 2. Chain-reaction: enemy explosions (including new ones) vs enemy missiles
-  //    Only check explosions that are chain-type for additional chain hits
+  // 2. Chain-reaction: all active enemy explosions vs enemy missiles
+  //    (Both chain and ground detonations can chain-kill missiles; isChain only gates city/battery destruction in section 3)
   for (const explosion of enemyExplosions) {
     if (explosion.done || explosion.radius <= 0) continue;
     for (const missile of enemyMissiles) {
