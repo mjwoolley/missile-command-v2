@@ -106,6 +106,7 @@ const STAR_COUNT    = 150;
 const BATTERY_MISSILE_COUNT = 10;
 const PLAYER_MISSILE_SPEED  = 300;
 const BATTERY_APEX_OFFSET   = 24;
+const CENTER_BATTERY_SPEED_MULTIPLIER = 1.5;
 
 class Starfield {
   constructor(count, width, height) {
@@ -570,24 +571,44 @@ class PlayerMissile {
 }
 
 class PlayerExplosion {
-  constructor(x, y, maxRadius = 40, duration = 0.5) {
+  constructor(x, y, maxRadius = 40, expandDuration = 0.25, holdDuration = 0.15, contractDuration = 0.25) {
     this.x         = x;
     this.y         = y;
     this.maxRadius = maxRadius;
-    this.duration  = duration;
-    this.radius    = 0;
-    this.alpha     = 1;
-    this.done      = false;
-    this.timer     = 0;
+    this.expandDuration   = expandDuration;
+    this.holdDuration     = holdDuration;
+    this.contractDuration = contractDuration;
+    this.phase   = 'expand';
+    this.timer   = 0;
+    this.radius  = 0;
+    this.done    = false;
   }
   update(dt) {
     if (this.done) return;
     this.timer += dt;
-    const progress = Math.min(this.timer / this.duration, 1);
-    this.radius = this.maxRadius * progress;
-    this.alpha  = 1 - progress;
-    if (this.timer >= this.duration) {
-      this.done = true;
+    if (this.phase === 'expand') {
+      if (this.timer >= this.expandDuration) {
+        this.radius = this.maxRadius;
+        this.timer -= this.expandDuration;
+        this.phase = 'hold';
+      } else {
+        this.radius = this.maxRadius * (this.timer / this.expandDuration);
+      }
+    }
+    if (this.phase === 'hold') {
+      this.radius = this.maxRadius;
+      if (this.timer >= this.holdDuration) {
+        this.timer -= this.holdDuration;
+        this.phase = 'contract';
+      }
+    }
+    if (this.phase === 'contract') {
+      if (this.timer >= this.contractDuration) {
+        this.radius = 0;
+        this.done = true;
+      } else {
+        this.radius = this.maxRadius * (1 - this.timer / this.contractDuration);
+      }
     }
   }
 }
@@ -638,18 +659,19 @@ describe('MIS-5 — PlayerMissile', () => {
 
 describe('MIS-5 — PlayerExplosion', () => {
   test('grows radius over time', () => {
-    const e = new PlayerExplosion(100, 200, 40, 0.5);
-    e.update(0.25); // half-way
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.1); // partial expand
     expect(e.radius).toBeGreaterThan(0);
     expect(e.radius).toBeLessThanOrEqual(40);
     expect(e.done).toBe(false);
   });
 
-  test('marks done after duration', () => {
-    const e = new PlayerExplosion(100, 200, 40, 0.5);
-    e.update(0.5);
+  test('marks done after full lifecycle', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    e.update(0.25); // contract
     expect(e.done).toBe(true);
-    expect(e.radius).toBe(40);
   });
 });
 
@@ -816,6 +838,112 @@ describe('MIS-5 — _mouseReady guard (no firing before first mousemove)', () =>
     expect(s._mouseReady).toBe(false);
     s._onMouseMove(100, 200);
     expect(s._mouseReady).toBe(true);
+  });
+});
+
+// ─── MIS-6 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-6 — PlayerExplosion lifecycle', () => {
+  test('initial phase is "expand" with radius 0', () => {
+    const e = new PlayerExplosion(100, 200);
+    expect(e.phase).toBe('expand');
+    expect(e.radius).toBe(0);
+    expect(e.done).toBe(false);
+  });
+
+  test('partial expand: radius > 0 and < maxRadius', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.1);
+    expect(e.phase).toBe('expand');
+    expect(e.radius).toBeGreaterThan(0);
+    expect(e.radius).toBeLessThanOrEqual(40);
+  });
+
+  test('after expand completes, phase is "hold" with radius === maxRadius', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.25); // exactly expand duration
+    expect(e.phase).toBe('hold');
+    expect(e.radius).toBe(40);
+  });
+
+  test('after hold completes, phase transitions to "contract"', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    expect(e.phase).toBe('contract');
+  });
+
+  test('after contract completes, done === true', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    e.update(0.25); // contract
+    expect(e.done).toBe(true);
+    expect(e.radius).toBe(0);
+  });
+
+  test('radius shrinks during contract phase', () => {
+    const e = new PlayerExplosion(100, 200, 40, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    e.update(0.1);  // partial contract
+    expect(e.phase).toBe('contract');
+    expect(e.radius).toBeGreaterThan(0);
+    expect(e.radius).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('MIS-6 — Speed differentiation', () => {
+  // Replicate _fireFrom logic inline (pure, no DOM)
+  function fireFrom(batteries, batteryIndex, targetX, targetY) {
+    if (batteryIndex < 0 || batteryIndex >= batteries.length) return null;
+    const battery = batteries[batteryIndex];
+    if (!battery.alive || battery.missiles <= 0) return null;
+    battery.missiles--;
+    const speed = batteryIndex === 1
+      ? PLAYER_MISSILE_SPEED * CENTER_BATTERY_SPEED_MULTIPLIER
+      : PLAYER_MISSILE_SPEED;
+    return new PlayerMissile(battery.x, battery.y - BATTERY_APEX_OFFSET, targetX, targetY, speed);
+  }
+
+  test('center battery (index 1) fires faster than left/right batteries', () => {
+    const batteries = [
+      new Battery(100, 540),
+      new Battery(400, 540),
+      new Battery(700, 540),
+    ];
+    const mCenter = fireFrom(batteries, 1, 400, 200);
+    const mLeft   = fireFrom(batteries, 0, 400, 200);
+    const mRight  = fireFrom(batteries, 2, 400, 200);
+    expect(mCenter.speed).toBeGreaterThan(mLeft.speed);
+    expect(mCenter.speed).toBeGreaterThan(mRight.speed);
+    expect(mCenter.speed).toBe(PLAYER_MISSILE_SPEED * CENTER_BATTERY_SPEED_MULTIPLIER);
+    expect(mLeft.speed).toBe(PLAYER_MISSILE_SPEED);
+    expect(mRight.speed).toBe(PLAYER_MISSILE_SPEED);
+  });
+
+  test('ammo decrements on each launch', () => {
+    const batteries = [new Battery(100, 540)];
+    expect(batteries[0].missiles).toBe(BATTERY_MISSILE_COUNT);
+    fireFrom(batteries, 0, 400, 200);
+    expect(batteries[0].missiles).toBe(BATTERY_MISSILE_COUNT - 1);
+    fireFrom(batteries, 0, 400, 200);
+    expect(batteries[0].missiles).toBe(BATTERY_MISSILE_COUNT - 2);
+  });
+
+  test('firing from empty battery does nothing', () => {
+    const batteries = [new Battery(100, 540)];
+    batteries[0].missiles = 0;
+    const result = fireFrom(batteries, 0, 400, 200);
+    expect(result).toBe(null);
+    expect(batteries[0].missiles).toBe(0);
+  });
+
+  test('firing from destroyed battery does nothing', () => {
+    const batteries = [new Battery(100, 540)];
+    batteries[0].destroy();
+    const result = fireFrom(batteries, 0, 400, 200);
+    expect(result).toBe(null);
   });
 });
 
