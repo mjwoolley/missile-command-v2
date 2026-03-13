@@ -3,6 +3,18 @@
  * Entry point: canvas setup, starfield, terrain, state machine, game loop.
  */
 
+import {
+  EnemyMissile,
+  EnemyExplosion,
+  ENEMY_MISSILE_BASE_SPEED,
+  ENEMY_MISSILE_SPEED_SCALE,
+  ENEMY_BASE_COUNT,
+  ENEMY_COUNT_SCALE,
+  ENEMY_MAX_COUNT,
+  ENEMY_MIRV_CHANCE,
+  ENEMY_TRAIL_LENGTH,
+} from './src/enemy.js';
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const CANVAS_WIDTH  = 800;
@@ -474,6 +486,10 @@ class Game {
     this.playerMissiles   = [];
     this.playerExplosions = [];
 
+    // Enemy missiles & explosions
+    this.enemyMissiles   = [];
+    this.enemyExplosions = [];
+
     // Crosshair
     this.crosshair  = new Crosshair();
     this._mouseX     = 0;
@@ -522,7 +538,7 @@ class Game {
         onUpdate: (dt) => { this.starfield.update(dt); },
       })
       .register(GameState.PLAYING, {
-        onEnter:  () => { /* spawn enemies etc. in future stories */ },
+        onEnter:  () => { this._spawnEnemyWave(); },
         onUpdate: (dt) => {
           this.starfield.update(dt);
 
@@ -538,6 +554,9 @@ class Game {
           // Update player explosions
           for (const e of this.playerExplosions) e.update(dt);
           this.playerExplosions = this.playerExplosions.filter(e => !e.done);
+
+          // Update enemies
+          this._updateEnemies(dt);
         },
       })
       .register(GameState.LEVEL_END, {
@@ -631,11 +650,77 @@ class Game {
     this._fireFrom(best, targetX, targetY);
   }
 
+  // ── Enemy spawning & update ───────────────────────────────────────────────
+
+  _spawnEnemyWave() {
+    const missileCount = Math.min(ENEMY_BASE_COUNT + (this.level - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT);
+    const speed = ENEMY_MISSILE_BASE_SPEED * (1 + (this.level - 1) * ENEMY_MISSILE_SPEED_SCALE);
+
+    const aliveTargets = [
+      ...this.cities.filter(c => c.alive),
+      ...this.batteries.filter(b => b.alive),
+    ];
+    if (aliveTargets.length === 0) return;
+
+    for (let i = 0; i < missileCount; i++) {
+      const startX = 50 + Math.random() * (CANVAS_WIDTH - 100);
+      const startY = 0;
+      const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+      const isMirv = Math.random() < ENEMY_MIRV_CHANCE;
+      let mirvAltitude = null;
+      if (isMirv) {
+        mirvAltitude = target.y * (0.3 + Math.random() * 0.4);
+      }
+      this.enemyMissiles.push(new EnemyMissile(startX, startY, target.x, target.y, speed, isMirv, mirvAltitude));
+    }
+  }
+
+  _updateEnemies(dt) {
+    // Update all enemy missiles
+    for (const missile of this.enemyMissiles) missile.update(dt);
+
+    // Process split and done missiles
+    const newMissiles = [];
+    const remaining = [];
+    for (const missile of this.enemyMissiles) {
+      if (missile.split) {
+        // Spawn 2-3 children from the split point
+        const childCount = 2 + Math.floor(Math.random() * 2); // 2 or 3
+        const aliveTargets = [
+          ...this.cities.filter(c => c.alive),
+          ...this.batteries.filter(b => b.alive),
+        ];
+        // If no alive targets when MIRV splits, no children spawn — wave ends cleanly
+        for (let i = 0; i < childCount && aliveTargets.length > 0; i++) {
+          const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+          newMissiles.push(new EnemyMissile(missile.x, missile.y, target.x, target.y, missile.speed, false, null));
+        }
+      } else if (missile.done) {
+        // Reached target — detonate
+        this.enemyExplosions.push(new EnemyExplosion(missile.targetX, missile.targetY));
+      } else {
+        remaining.push(missile);
+      }
+    }
+    this.enemyMissiles = remaining.concat(newMissiles);
+
+    // Update enemy explosions
+    for (const explosion of this.enemyExplosions) explosion.update(dt);
+    this.enemyExplosions = this.enemyExplosions.filter(explosion => !explosion.done);
+
+    // Wave end detection
+    if (this.enemyMissiles.length === 0 && this.enemyExplosions.length === 0) {
+      this.sm.transition(GameState.LEVEL_END);
+    }
+  }
+
   _reset() {
     this.level = 1;
     this.score = 0;
     this.playerMissiles   = [];
     this.playerExplosions = [];
+    this.enemyMissiles    = [];
+    this.enemyExplosions  = [];
     this._initLayout();  // restore batteries (full ammo, alive) and cities (alive)
   }
 
@@ -667,6 +752,10 @@ class Game {
     // Player missiles and explosions
     for (const m of this.playerMissiles)   m.render(ctx);
     for (const e of this.playerExplosions) e.render(ctx);
+
+    // Enemy missiles and explosions
+    for (const missile of this.enemyMissiles)     missile.render(ctx);
+    for (const explosion of this.enemyExplosions) explosion.render(ctx);
 
     // HUD (score / level) when playing or level end
     const state = this.sm.current;

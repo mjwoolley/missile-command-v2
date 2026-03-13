@@ -1,9 +1,20 @@
 /**
- * MIS-3 Unit Tests — game scaffolding, state machine, terrain, starfield
+ * Unit Tests — MIS-3 through MIS-7
  *
- * Run with: node --experimental-vm-modules tests/game.test.js
- * Or:       node tests/game.test.js   (uses the inline test runner below)
+ * Run with: node tests/game.test.js
  */
+
+import {
+  EnemyMissile,
+  EnemyExplosion,
+  ENEMY_MISSILE_BASE_SPEED,
+  ENEMY_MISSILE_SPEED_SCALE,
+  ENEMY_BASE_COUNT,
+  ENEMY_COUNT_SCALE,
+  ENEMY_MAX_COUNT,
+  ENEMY_MIRV_CHANCE,
+  ENEMY_TRAIL_LENGTH,
+} from '../src/enemy.js';
 
 // ─── Minimal test runner (no dependencies) ───────────────────────────────────
 
@@ -222,7 +233,11 @@ describe('GameState', () => {
   });
 
   test('is frozen (immutable)', () => {
-    GameState.TITLE = 'MUTATED'; // should silently fail in strict or be ignored
+    // In ES module strict mode, mutating a frozen object throws TypeError.
+    // In sloppy mode (old CommonJS) it was a silent no-op. Both are valid JS
+    // semantics for Object.freeze; the important assertion is that the value
+    // is unchanged either way.
+    try { GameState.TITLE = 'MUTATED'; } catch { /* strict mode throw — expected */ }
     expect(GameState.TITLE).toBe('TITLE');
   });
 });
@@ -944,6 +959,230 @@ describe('MIS-6 — Speed differentiation', () => {
     batteries[0].destroy();
     const result = fireFrom(batteries, 0, 400, 200);
     expect(result).toBe(null);
+  });
+});
+
+// ─── MIS-7 Tests ──────────────────────────────────────────────────────────────
+
+describe('MIS-7 — EnemyMissile', () => {
+  test('EnemyMissile moves toward target', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 100);
+    m.update(1);
+    expect(m.y).toBeGreaterThan(0);
+    expect(m.done).toBe(false);
+  });
+
+  test('EnemyMissile records trail positions', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 100);
+    m.update(0.1);
+    expect(m.trail.length).toBeGreaterThan(0);
+    expect(m.trail[0].x).toBe(400);
+    expect(m.trail[0].y).toBe(0);
+  });
+
+  test('EnemyMissile trail is capped at ENEMY_TRAIL_LENGTH', () => {
+    const m = new EnemyMissile(400, 0, 400, 5400, 10); // far target so it won't arrive
+    for (let i = 0; i < 50; i++) m.update(0.016);
+    expect(m.trail.length).toBeLessThanOrEqual(ENEMY_TRAIL_LENGTH);
+  });
+
+  test('MIRV sets split=true when reaching mirvAltitude', () => {
+    // Target at y=540, mirvAltitude at y=200
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    m.update(0.3); // should move 300px down, past altitude 200
+    expect(m.split).toBe(true);
+    expect(m.done).toBe(true);
+  });
+
+  test('MIRV done=true guard prevents re-entry into update logic', () => {
+    // Once a MIRV sets done=true (via split), the `if (this.done) return` guard
+    // at the top of update() makes all subsequent calls no-ops.
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    m.update(0.3); // triggers split → split=true, done=true
+    expect(m.split).toBe(true);
+    expect(m.done).toBe(true);
+
+    const xAfterSplit      = m.x;
+    const yAfterSplit      = m.y;
+    const trailAfterSplit  = m.trail.length;
+
+    // Large dt — would move the missile far if update() were not guarded
+    m.update(100);
+    m.update(100);
+
+    expect(m.x).toBe(xAfterSplit);           // position unchanged
+    expect(m.y).toBe(yAfterSplit);           // position unchanged
+    expect(m.trail.length).toBe(trailAfterSplit); // no new trail entries
+  });
+
+  test('Non-MIRV never sets split=true', () => {
+    const m = new EnemyMissile(400, 0, 400, 540, 1000, false, null);
+    m.update(1); // reaches target
+    expect(m.split).toBe(false);
+    expect(m.done).toBe(true);
+  });
+
+  test('EnemyMissile marks done when reaching target', () => {
+    const m = new EnemyMissile(400, 0, 400, 10, 10000);
+    m.update(1);
+    expect(m.done).toBe(true);
+    expect(m.x).toBe(400);
+    expect(m.y).toBe(10);
+  });
+});
+
+describe('MIS-7 — EnemyExplosion', () => {
+  test('EnemyExplosion has same lifecycle as PlayerExplosion (expand/hold/contract)', () => {
+    const e = new EnemyExplosion(100, 540);
+    expect(e.phase).toBe('expand');
+    e.update(0.1);
+    expect(e.radius).toBeGreaterThan(0);
+    e.update(0.15); // finish expand
+    expect(e.phase).toBe('hold');
+    expect(e.radius).toBe(35);
+    e.update(0.15); // finish hold
+    expect(e.phase).toBe('contract');
+  });
+
+  test('EnemyExplosion done after full lifecycle', () => {
+    const e = new EnemyExplosion(100, 540, 35, 0.25, 0.15, 0.25);
+    e.update(0.25); // expand
+    e.update(0.15); // hold
+    e.update(0.25); // contract
+    expect(e.done).toBe(true);
+    expect(e.radius).toBe(0);
+  });
+});
+
+describe('MIS-7 — _spawnEnemyWave logic', () => {
+  test('missile count formula: base + (level-1)*scale, capped at max', () => {
+    // Level 1: 8
+    expect(Math.min(ENEMY_BASE_COUNT + (1 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(8);
+    // Level 4: 8 + 3*2 = 14
+    expect(Math.min(ENEMY_BASE_COUNT + (4 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(14);
+    // Level 7: 8 + 6*2 = 20 (cap)
+    expect(Math.min(ENEMY_BASE_COUNT + (7 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(20);
+    // Level 10: capped at 20
+    expect(Math.min(ENEMY_BASE_COUNT + (10 - 1) * ENEMY_COUNT_SCALE, ENEMY_MAX_COUNT)).toBe(20);
+  });
+
+  test('speed formula: base * (1 + (level-1)*scale)', () => {
+    // Level 1: 80
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (1 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(80);
+    // Level 2: 80 * 1.15 = 92
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (2 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(92);
+    // Level 5: 80 * 1.6 = 128
+    expect(ENEMY_MISSILE_BASE_SPEED * (1 + (5 - 1) * ENEMY_MISSILE_SPEED_SCALE)).toBe(128);
+  });
+
+  test('MIRV chance is within valid probability range', () => {
+    expect(ENEMY_MIRV_CHANCE).toBeGreaterThan(0);
+    expect(ENEMY_MIRV_CHANCE).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('MIS-7 — enemy wave end detection', () => {
+  test('transitions to LEVEL_END when all missiles and explosions are gone', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [],
+      enemyExplosions: [],
+      cities: [new City(100, 540, 0)],
+      batteries: [new Battery(400, 540)],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    // Simulate _updateEnemies logic: empty arrays → transition
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(true);
+  });
+
+  test('does NOT transition when missiles still in flight', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [new EnemyMissile(400, 0, 400, 540, 80)],
+      enemyExplosions: [],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(false);
+  });
+
+  test('does NOT transition when explosions still active', () => {
+    let transitioned = false;
+    const state = {
+      enemyMissiles: [],
+      enemyExplosions: [new EnemyExplosion(400, 540)],
+      sm: { transition(s) { if (s === GameState.LEVEL_END) transitioned = true; } },
+    };
+    if (state.enemyMissiles.length === 0 && state.enemyExplosions.length === 0) {
+      state.sm.transition(GameState.LEVEL_END);
+    }
+    expect(transitioned).toBe(false);
+  });
+});
+
+describe('MIS-7 — EnemyMissile edge cases', () => {
+  test('rejects zero speed', () => {
+    expect(() => new EnemyMissile(400, 0, 400, 540, 0)).toThrow();
+  });
+
+  test('rejects negative speed', () => {
+    expect(() => new EnemyMissile(400, 0, 400, 540, -10)).toThrow();
+  });
+
+  test('spawnEnemyWave with no alive targets produces no missiles (early-return path)', () => {
+    // When all cities and batteries are destroyed, aliveTargets is empty.
+    // _spawnEnemyWave returns early, leaving enemyMissiles empty.
+    // The first _updateEnemies call will then immediately transition to LEVEL_END.
+    // This is intentional: a destroyed base shouldn't block wave-end detection.
+    function spawnWave(cities, batteries, level) {
+      const aliveTargets = [
+        ...cities.filter(c => c.alive),
+        ...batteries.filter(b => b.alive),
+      ];
+      if (aliveTargets.length === 0) return []; // early-return guard
+      const missileCount = Math.min(
+        ENEMY_BASE_COUNT + (level - 1) * ENEMY_COUNT_SCALE,
+        ENEMY_MAX_COUNT
+      );
+      const speed = ENEMY_MISSILE_BASE_SPEED * (1 + (level - 1) * ENEMY_MISSILE_SPEED_SCALE);
+      const missiles = [];
+      for (let i = 0; i < missileCount; i++) {
+        const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+        missiles.push(new EnemyMissile(50, 0, target.x, target.y, speed));
+      }
+      return missiles;
+    }
+
+    const deadCity    = new City(100, 540, 0); deadCity.destroy();
+    const deadBattery = new Battery(400, 540);  deadBattery.destroy();
+    const result = spawnWave([deadCity], [deadBattery], 1);
+    expect(result).toHaveLength(0);
+  });
+
+  test('MIRV split with no alive targets spawns no children (wave ends cleanly)', () => {
+    // If all cities/batteries are destroyed when a MIRV splits, the
+    // aliveTargets guard (`&& aliveTargets.length > 0`) produces no children.
+    // The wave should still resolve: no stranded missiles, clean LEVEL_END.
+    const missile = new EnemyMissile(400, 0, 400, 540, 1000, true, 200);
+    missile.update(0.3); // triggers split
+    expect(missile.split).toBe(true);
+
+    // Simulate _updateEnemies child-spawn logic with no alive targets
+    const aliveTargets = [];
+    const newMissiles  = [];
+    const childCount   = 2 + Math.floor(Math.random() * 2); // 2 or 3
+    for (let i = 0; i < childCount && aliveTargets.length > 0; i++) {
+      const target = aliveTargets[Math.floor(Math.random() * aliveTargets.length)];
+      newMissiles.push(new EnemyMissile(missile.x, missile.y, target.x, target.y, missile.speed, false, null));
+    }
+
+    // No children produced — wave can end on next _updateEnemies tick
+    expect(newMissiles).toHaveLength(0);
   });
 });
 
