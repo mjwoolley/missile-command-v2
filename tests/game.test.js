@@ -1567,6 +1567,104 @@ describe('MIS-9: checkCollisions multiplier', () => {
   });
 });
 
+// ─── MIS-10: shouldTriggerGameOver ───────────────────────────────────────────
+
+import { shouldTriggerGameOver, loadHighScore, updateHighScore } from '../src/gamestate.js';
+
+describe('MIS-10: shouldTriggerGameOver', () => {
+  test('returns false when all cities alive', () => {
+    const cities = [{ alive: true }, { alive: true }, { alive: true }];
+    expect(shouldTriggerGameOver(cities, 0)).toBe(false);
+  });
+
+  test('returns false when some cities alive', () => {
+    const cities = [{ alive: false }, { alive: true }, { alive: false }];
+    expect(shouldTriggerGameOver(cities, 0)).toBe(false);
+  });
+
+  test('returns true when all cities dead and no reserves', () => {
+    const cities = [{ alive: false }, { alive: false }, { alive: false }];
+    expect(shouldTriggerGameOver(cities, 0)).toBe(true);
+  });
+
+  test('returns false when all cities dead but bonus cities in reserve', () => {
+    const cities = [{ alive: false }, { alive: false }];
+    expect(shouldTriggerGameOver(cities, 2)).toBe(false);
+  });
+
+  test('returns false for empty cities array', () => {
+    expect(shouldTriggerGameOver([], 0)).toBe(false);
+  });
+});
+
+// ─── MIS-10: loadHighScore / updateHighScore ──────────────────────────────────
+
+describe('MIS-10: loadHighScore', () => {
+  test('returns 0 when no stored value', () => {
+    const storage = { getItem: () => null };
+    expect(loadHighScore(storage)).toBe(0);
+  });
+
+  test('returns parsed integer from storage', () => {
+    const storage = { getItem: () => '42500' };
+    expect(loadHighScore(storage)).toBe(42500);
+  });
+
+  test('returns 0 for non-numeric stored value', () => {
+    const storage = { getItem: () => 'garbage' };
+    expect(loadHighScore(storage)).toBe(0);
+  });
+
+  test('returns 0 when storage throws', () => {
+    const storage = { getItem: () => { throw new Error('blocked'); } };
+    expect(loadHighScore(storage)).toBe(0);
+  });
+});
+
+describe('MIS-10: updateHighScore', () => {
+  test('saves and returns new high when score beats current', () => {
+    const store = {};
+    const storage = {
+      getItem: k => store[k] ?? null,
+      setItem: (k, v) => { store[k] = v; },
+    };
+    const newHigh = updateHighScore(50000, 30000, storage);
+    expect(newHigh).toBe(50000);
+    expect(store['missileCommandHighScore']).toBe('50000');
+  });
+
+  test('returns current high when score does not beat it', () => {
+    const store = {};
+    const storage = {
+      getItem: k => store[k] ?? null,
+      setItem: (k, v) => { store[k] = v; },
+    };
+    const newHigh = updateHighScore(10000, 50000, storage);
+    expect(newHigh).toBe(50000);
+    expect(store['missileCommandHighScore']).toBe('50000');
+  });
+
+  test('does not throw when storage is unavailable', () => {
+    const storage = {
+      getItem: () => null,
+      setItem: () => { throw new Error('quota exceeded'); },
+    };
+    // Should not throw — silently fails
+    const newHigh = updateHighScore(1000, 0, storage);
+    expect(newHigh).toBe(1000);
+  });
+
+  test('sets high score to 0 when both score and current are 0', () => {
+    const store = {};
+    const storage = {
+      getItem: k => store[k] ?? null,
+      setItem: (k, v) => { store[k] = v; },
+    };
+    const newHigh = updateHighScore(0, 0, storage);
+    expect(newHigh).toBe(0);
+  });
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(50)}`);
