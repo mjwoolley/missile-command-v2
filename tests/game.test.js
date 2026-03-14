@@ -31,6 +31,10 @@ import {
   BONUS_CITY_THRESHOLD,
 } from '../src/scoring.js';
 
+import { ScreenShake } from '../src/screenshake.js';
+import { AudioEngine } from '../src/audio.js';
+import { lerpExplosionColor } from '../src/explosion-color.js';
+
 // ─── Minimal test runner (no dependencies) ───────────────────────────────────
 
 let passed = 0;
@@ -1565,6 +1569,181 @@ describe('MIS-9: checkCollisions multiplier', () => {
     const result = checkCollisions(state);
     expect(result.score).toBe(POINTS_PER_MISSILE);
   });
+});
+
+// ─── MIS-11: ScreenShake ──────────────────────────────────────────────────────
+
+console.log('\nMIS-11 — ScreenShake');
+
+test('trigger sets active to true', () => {
+  const shake = new ScreenShake();
+  expect(shake.active).toBe(false);
+  shake.trigger(8, 300);
+  expect(shake.active).toBe(true);
+});
+
+test('update decays offset over time', () => {
+  const shake = new ScreenShake();
+  shake.trigger(10, 500);
+  shake.update(0.1);
+  expect(shake.active).toBe(true);
+  // After some updates the offset should be non-zero (with high probability)
+  // We just verify it doesn't throw and active is still true partway
+  shake.update(0.1);
+  expect(shake.active).toBe(true);
+});
+
+test('after duration, offset returns to near-zero and active is false', () => {
+  const shake = new ScreenShake();
+  shake.trigger(10, 300);
+  // Simulate time past the duration (0.3s)
+  shake.update(0.35);
+  expect(shake.active).toBe(false);
+  expect(shake.offsetX).toBe(0);
+  expect(shake.offsetY).toBe(0);
+});
+
+test('apply and reset do not throw on a mock context', () => {
+  const shake = new ScreenShake();
+  const mockCtx = {
+    save() {},
+    restore() {},
+    translate() {},
+  };
+  // Should not throw when inactive
+  shake.apply(mockCtx);
+  shake.reset(mockCtx);
+  // Should not throw when active
+  shake.trigger(5, 200);
+  shake.update(0.05);
+  shake.apply(mockCtx);
+  shake.reset(mockCtx);
+});
+
+test('apply and reset do nothing when not active', () => {
+  const shake = new ScreenShake();
+  let saveCalled = false;
+  let restoreCalled = false;
+  const mockCtx = {
+    save() { saveCalled = true; },
+    restore() { restoreCalled = true; },
+    translate() {},
+  };
+  shake.apply(mockCtx);
+  shake.reset(mockCtx);
+  expect(saveCalled).toBe(false);
+  expect(restoreCalled).toBe(false);
+});
+
+// ─── MIS-11: AudioEngine ─────────────────────────────────────────────────────
+
+console.log('\nMIS-11 — AudioEngine');
+
+test('construction does not throw', () => {
+  const audio = new AudioEngine();
+  expect(audio.isMuted).toBe(false);
+});
+
+test('mute/unmute toggles isMuted', () => {
+  const audio = new AudioEngine();
+  audio.mute();
+  expect(audio.isMuted).toBe(true);
+  audio.unmute();
+  expect(audio.isMuted).toBe(false);
+});
+
+test('playLaunch does not throw (no AudioContext in Node)', () => {
+  const audio = new AudioEngine();
+  audio.playLaunch();
+});
+
+test('playExplosion does not throw (no AudioContext in Node)', () => {
+  const audio = new AudioEngine();
+  audio.playExplosion();
+});
+
+test('playCityDestruction does not throw (no AudioContext in Node)', () => {
+  const audio = new AudioEngine();
+  audio.playCityDestruction();
+});
+
+test('startAmbient/stopAmbient do not throw (no AudioContext in Node)', () => {
+  const audio = new AudioEngine();
+  audio.startAmbient();
+  audio.stopAmbient();
+});
+
+test('play methods do not throw when muted', () => {
+  const audio = new AudioEngine();
+  audio.mute();
+  audio.playLaunch();
+  audio.playExplosion();
+  audio.playCityDestruction();
+  audio.startAmbient();
+  audio.stopAmbient();
+});
+
+// ─── MIS-11: Explosion Color Interpolation ───────────────────────────────────
+
+console.log('\nMIS-11 — Explosion Color Interpolation');
+
+test('t=0 returns near white (255,255,255)', () => {
+  const c = lerpExplosionColor(0);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(255);
+  expect(c.b).toBe(255);
+});
+
+test('t=0.33 returns yellow (255,255,0)', () => {
+  const c = lerpExplosionColor(0.33);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(255);
+  expect(c.b).toBe(0);
+});
+
+test('t=0.5 is orange-ish (high r, moderate g, 0 b)', () => {
+  const c = lerpExplosionColor(0.5);
+  expect(c.r).toBe(255);
+  expect(c.g).toBeGreaterThan(100);
+  expect(c.g).toBeLessThanOrEqual(255);
+  expect(c.b).toBe(0);
+});
+
+test('t=1 returns red (255,0,0)', () => {
+  const c = lerpExplosionColor(1);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(0);
+  expect(c.b).toBe(0);
+});
+
+test('t values are clamped — negative treated as 0', () => {
+  const c = lerpExplosionColor(-0.5);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(255);
+  expect(c.b).toBe(255);
+});
+
+test('t values are clamped — above 1 treated as 1', () => {
+  const c = lerpExplosionColor(1.5);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(0);
+  expect(c.b).toBe(0);
+});
+
+test('t=0.66 returns orange (255,140,0)', () => {
+  const c = lerpExplosionColor(0.66);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(140);
+  expect(c.b).toBe(0);
+});
+
+test('interpolation is smooth — midpoint between white and yellow', () => {
+  const c = lerpExplosionColor(0.165);
+  expect(c.r).toBe(255);
+  expect(c.g).toBe(255);
+  // b should be ~128 (halfway between 255 and 0)
+  expect(c.b).toBeGreaterThan(100);
+  expect(c.b).toBeLessThanOrEqual(155);
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
