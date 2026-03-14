@@ -8,8 +8,21 @@ export const ENEMY_MISSILE_SPEED_SCALE = 0.15;   // +15% per level
 export const ENEMY_BASE_COUNT = 8;               // missiles at level 1
 export const ENEMY_COUNT_SCALE = 2;              // +2 per level
 export const ENEMY_MAX_COUNT = 20;
-export const ENEMY_MIRV_CHANCE = 0.3;            // 30% of missiles are MIRVs
+export const ENEMY_MIRV_CHANCE = 0.3;            // 30% base chance of missiles being MIRVs
+export const ENEMY_MIRV_CHANCE_SCALE = 0.05;     // +5% per level
+export const ENEMY_MIRV_CHANCE_MAX = 0.7;        // capped at 70%
 export const ENEMY_TRAIL_LENGTH = 30;
+
+/**
+ * Return the MIRV chance for a given level.
+ * Base 30% + 5% per level above 1, capped at 70%.
+ *
+ * @param {number} level — 1-based level number
+ * @returns {number}
+ */
+export function getMirvChance(level) {
+  return Math.min(ENEMY_MIRV_CHANCE + (level - 1) * ENEMY_MIRV_CHANCE_SCALE, ENEMY_MIRV_CHANCE_MAX);
+}
 
 export class EnemyMissile {
   /**

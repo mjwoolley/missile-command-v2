@@ -18,10 +18,12 @@ export const POINTS_PER_MISSILE = 25;
  * @param {Array} state.cities            — City instances
  * @param {Array} state.batteries         — Battery instances
  * @param {number} state.score            — current score (read/write)
+ * @param {number} [state.multiplier=1]   — scoring multiplier for this level
  * @returns {{ score: number, gameOver: boolean }}
  */
 export function checkCollisions(state) {
   const { playerExplosions, enemyMissiles, enemyExplosions, cities, batteries } = state;
+  const multiplier = state.multiplier || 1;
   let score = state.score;
 
   // 1. Player explosions vs enemy missiles
@@ -36,7 +38,7 @@ export function checkCollisions(state) {
       if (dx * dx + dy * dy <= explosion.radius * explosion.radius) {
         missile.done = true;
         missile.intercepted = true;
-        score += POINTS_PER_MISSILE;
+        score += POINTS_PER_MISSILE * multiplier;
         const chainExplosion = new EnemyExplosion(missile.x, missile.y);
         chainExplosion.isChain = true;
         newChainExplosions.push(chainExplosion);
@@ -57,7 +59,7 @@ export function checkCollisions(state) {
       if (dx * dx + dy * dy <= explosion.radius * explosion.radius) {
         missile.done = true;
         missile.intercepted = true;
-        score += POINTS_PER_MISSILE;
+        score += POINTS_PER_MISSILE * multiplier;
         const chainExplosion = new EnemyExplosion(missile.x, missile.y);
         chainExplosion.isChain = true;
         newChainExplosions.push(chainExplosion);
