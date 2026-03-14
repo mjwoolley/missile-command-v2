@@ -32,6 +32,10 @@ import {
   BONUS_CITY_POINTS,
 } from './src/scoring.js';
 
+import { AudioEngine } from './src/audio.js';
+import { ScreenShake } from './src/screenshake.js';
+import { lerpExplosionColor } from './src/explosion-color.js';
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const CANVAS_WIDTH  = 800;
@@ -445,19 +449,30 @@ class PlayerExplosion {
       ? 1 - Math.min(this.timer / this.contractDuration, 1)
       : 1;
 
-    // Radial gradient fill: white core → blue-white → orange → transparent red edge
+    // Compute lifetime progress for color interpolation
+    const totalDuration = this.expandDuration + this.holdDuration + this.contractDuration;
+    let elapsed = this.timer;
+    if (this.phase === 'hold') elapsed += this.expandDuration;
+    else if (this.phase === 'contract') elapsed += this.expandDuration + this.holdDuration;
+    const t = Math.min(elapsed / totalDuration, 1);
+
+    // Color transitions: white → yellow → orange → red over lifetime
+    const coreColor = lerpExplosionColor(t * 0.5);        // core stays brighter
+    const midColor  = lerpExplosionColor(t);               // mid follows full progression
+    const edgeColor = lerpExplosionColor(Math.min(t + 0.3, 1)); // edge is ahead
+
     const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
-    grad.addColorStop(0,   'rgba(255, 255, 255, ' + alpha + ')');
-    grad.addColorStop(0.3, 'rgba(200, 230, 255, ' + alpha + ')');
-    grad.addColorStop(0.6, 'rgba(255, 140, 20,  ' + alpha + ')');
-    grad.addColorStop(1.0, 'rgba(255, 60,  0,   0)');
+    grad.addColorStop(0,   `rgba(${coreColor.r}, ${coreColor.g}, ${coreColor.b}, ${alpha})`);
+    grad.addColorStop(0.3, `rgba(${midColor.r}, ${midColor.g}, ${midColor.b}, ${alpha})`);
+    grad.addColorStop(0.6, `rgba(${edgeColor.r}, ${edgeColor.g}, ${edgeColor.b}, ${alpha})`);
+    grad.addColorStop(1.0, `rgba(${edgeColor.r}, ${edgeColor.g}, ${edgeColor.b}, 0)`);
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
 
-    // Thin white outer ring
-    ctx.strokeStyle = 'rgba(255, 255, 255, ' + alpha + ')';
+    // Thin outer ring in edge color
+    ctx.strokeStyle = `rgba(${edgeColor.r}, ${edgeColor.g}, ${edgeColor.b}, ${alpha})`;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
@@ -520,6 +535,10 @@ class Game {
     this._mouseReady = false;  // true once the player has moved the mouse over the canvas
     canvas.style.cursor = 'none';
 
+    // Audio & screen shake
+    this.audio = new AudioEngine();
+    this.screenShake = new ScreenShake();
+
     // Timing
     this._lastTime = null;
 
@@ -561,15 +580,20 @@ class Game {
         onUpdate: (dt) => { this.starfield.update(dt); },
       })
       .register(GameState.PLAYING, {
-        onEnter:  () => { this._spawnEnemyWave(); },
+        onEnter:  () => {
+          this._spawnEnemyWave();
+          this.audio.startAmbient();
+        },
         onUpdate: (dt) => {
           this.starfield.update(dt);
+          this.screenShake.update(dt);
 
           // Update player missiles
           for (const m of this.playerMissiles) {
             m.update(dt);
             if (m.done) {
               this.playerExplosions.push(new PlayerExplosion(m.targetX, m.targetY));
+              this.audio.playExplosion();
             }
           }
           this.playerMissiles = this.playerMissiles.filter(m => !m.done);
@@ -587,6 +611,7 @@ class Game {
       })
       .register(GameState.LEVEL_END, {
         onEnter:  () => {
+          this.audio.stopAmbient();
           const multiplier = getScoreMultiplier(this.level);
           const remainingMissiles = this.batteries.reduce((sum, b) => sum + (b.alive ? b.missiles : 0), 0);
           const survivingCities = this.cities.filter(c => c.alive).length;
@@ -625,6 +650,7 @@ class Game {
       })
       .register(GameState.GAME_OVER, {
         onEnter:  () => {
+          this.audio.stopAmbient();
           // Persist high score when game ends
           this.highScore = updateHighScore(this.score, this.highScore, localStorage);
         },
@@ -643,6 +669,14 @@ class Game {
     if (state === GameState.GAME_OVER) {
       this._reset();
       this.sm.transition(GameState.TITLE);
+    }
+    if (e.key === 'm' || e.key === 'M') {
+      if (this.audio.isMuted) {
+        this.audio.unmute();
+        if (state === GameState.PLAYING) this.audio.startAmbient();
+      } else {
+        this.audio.mute();
+      }
     }
     if (state === GameState.PLAYING && this._mouseReady) {
       if (e.key === '1') this._fireFrom(0, this._mouseX, this._mouseY);
@@ -688,6 +722,7 @@ class Game {
     this.playerMissiles.push(
       new PlayerMissile(battery.x, battery.y - BATTERY_APEX_OFFSET, targetX, targetY, speed)
     );
+    this.audio.playLaunch();
   }
 
   /** Fire from the nearest available battery toward (targetX, targetY). */
@@ -778,6 +813,10 @@ class Game {
   }
 
   _checkCollisions() {
+    // Snapshot alive states before collision check
+    const citiesAliveBefore = this.cities.map(c => c.alive);
+    const batteriesAliveBefore = this.batteries.map(b => b.alive);
+
     const result = checkCollisions({
       playerExplosions: this.playerExplosions,
       enemyMissiles:    this.enemyMissiles,
@@ -789,6 +828,25 @@ class Game {
     });
     this.score = result.score;
     this._checkBonusCityAward();
+
+    // Detect newly destroyed cities/batteries for audio + screen shake
+    let destroyed = false;
+    for (let i = 0; i < this.cities.length; i++) {
+      if (citiesAliveBefore[i] && !this.cities[i].alive) {
+        this.audio.playCityDestruction();
+        destroyed = true;
+      }
+    }
+    for (let i = 0; i < this.batteries.length; i++) {
+      if (batteriesAliveBefore[i] && !this.batteries[i].alive) {
+        this.audio.playCityDestruction();
+        destroyed = true;
+      }
+    }
+    if (destroyed) {
+      this.screenShake.trigger(8, 300);
+    }
+
     // Use shouldTriggerGameOver so bonus-city reserve can keep the player alive
     if (shouldTriggerGameOver(this.cities, this.bonusCitiesReserve)) {
       this.sm.transition(GameState.GAME_OVER);
@@ -845,6 +903,9 @@ class Game {
   render() {
     const ctx = this.ctx;
 
+    // Screen shake: apply canvas translation
+    this.screenShake.apply(ctx);
+
     // Black sky
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, this.width, this.height);
@@ -885,12 +946,26 @@ class Game {
     if (state === GameState.LEVEL_END) this._renderLevelEnd(ctx);
     if (state === GameState.GAME_OVER) this._renderGameOver(ctx);
 
+    // Mute indicator (top-right)
+    if (state === GameState.PLAYING) {
+      ctx.save();
+      ctx.font = '20px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(this.audio.isMuted ? '\uD83D\uDD07' : '\uD83D\uDD0A', this.width - 40, 6);
+      ctx.restore();
+    }
+
     // Crosshair (drawn last, on top of everything)
     if (state === GameState.PLAYING) {
       this.crosshair.x = this._mouseX;
       this.crosshair.y = this._mouseY;
       this.crosshair.render(ctx);
     }
+
+    // Screen shake: restore canvas translation
+    this.screenShake.reset(ctx);
   }
 
   _renderHUD(ctx) {
