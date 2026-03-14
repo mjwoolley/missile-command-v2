@@ -18,6 +18,12 @@ import {
 import { checkCollisions } from './src/collision.js';
 
 import {
+  shouldTriggerGameOver,
+  loadHighScore,
+  updateHighScore,
+} from './src/gamestate.js';
+
+import {
   getScoreMultiplier,
   getBonusCitiesEarned,
   getMissileBonus,
@@ -511,6 +517,9 @@ class Game {
     this._bonusCityFlashTimer = 0; // countdown for "BONUS CITY!" notification
     this._initLayout();
 
+    // High score (persisted across sessions)
+    this.highScore = loadHighScore(localStorage);
+
     // Player missiles & explosions
     this.playerMissiles   = [];
     this.playerExplosions = [];
@@ -640,7 +649,11 @@ class Game {
         },
       })
       .register(GameState.GAME_OVER, {
-        onEnter:  () => { this.audio.stopAmbient(); },
+        onEnter:  () => {
+          this.audio.stopAmbient();
+          // Persist high score when game ends
+          this.highScore = updateHighScore(this.score, this.highScore, localStorage);
+        },
         onUpdate: (dt) => { this.starfield.update(dt); },
       });
   }
@@ -649,9 +662,13 @@ class Game {
 
   _onKeyDown(e) {
     const state = this.sm.current;
-    if (e.key === 'Enter' || e.key === ' ') {
-      if (state === GameState.TITLE)     this.sm.transition(GameState.PLAYING);
-      if (state === GameState.GAME_OVER) { this._reset(); this.sm.transition(GameState.TITLE); }
+    if (state === GameState.TITLE && (e.key === 'Enter' || e.key === ' ')) {
+      this.sm.transition(GameState.PLAYING);
+    }
+    // Any key returns from game over to title screen (faithful to original)
+    if (state === GameState.GAME_OVER) {
+      this._reset();
+      this.sm.transition(GameState.TITLE);
     }
     if (e.key === 'm' || e.key === 'M') {
       if (this.audio.isMuted) {
@@ -830,7 +847,8 @@ class Game {
       this.screenShake.trigger(8, 300);
     }
 
-    if (result.gameOver) {
+    // Use shouldTriggerGameOver so bonus-city reserve can keep the player alive
+    if (shouldTriggerGameOver(this.cities, this.bonusCitiesReserve)) {
       this.sm.transition(GameState.GAME_OVER);
     }
   }
@@ -967,22 +985,37 @@ class Game {
   _renderTitle(ctx) {
     // Semi-transparent backdrop
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(0, 0, this.width, this.height);
     ctx.restore();
 
+    // Game title — retro red, large
     drawCenteredText(ctx,
       ['MISSILE COMMAND'],
-      this.height / 2 - 60,
+      this.height / 2 - 80,
       this.width,
-      { font: '56px monospace', fillStyle: '#ff4444', lineHeight: 70 }
+      { font: 'bold 56px monospace', fillStyle: '#ff3300', lineHeight: 70 }
     );
-    drawCenteredText(ctx,
-      ['PRESS ENTER OR CLICK TO START'],
-      this.height / 2 + 30,
-      this.width,
-      { font: '20px monospace', fillStyle: '#aaa', lineHeight: 30 }
-    );
+
+    // High score display
+    if (this.highScore > 0) {
+      drawCenteredText(ctx,
+        [`HIGH SCORE: ${this.highScore}`],
+        this.height / 2 + 10,
+        this.width,
+        { font: '22px monospace', fillStyle: '#ffff00', lineHeight: 30 }
+      );
+    }
+
+    // Prompt — blinking handled by time-based alpha
+    const blinkAlpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+    ctx.save();
+    ctx.font = '22px monospace';
+    ctx.fillStyle = `rgba(170, 170, 170, ${blinkAlpha})`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CLICK TO START', this.width / 2, this.height / 2 + (this.highScore > 0 ? 60 : 40));
+    ctx.restore();
   }
 
   _renderLevelEnd(ctx) {
@@ -1008,15 +1041,42 @@ class Game {
 
   _renderGameOver(ctx) {
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
     ctx.fillRect(0, 0, this.width, this.height);
     ctx.restore();
 
+    // "THE END" — faithful to original arcade
     drawCenteredText(ctx,
-      ['GAME OVER', `FINAL SCORE: ${this.score}`, 'PRESS ENTER / SPACE OR CLICK TO RESTART'],
-      this.height / 2 - 60,
+      ['THE END'],
+      this.height / 2 - 90,
       this.width,
-      { font: '40px monospace', fillStyle: '#ff4444', lineHeight: 56 }
+      { font: 'bold 64px monospace', fillStyle: '#ff3300', lineHeight: 70 }
+    );
+
+    // Final score
+    drawCenteredText(ctx,
+      [`FINAL SCORE: ${this.score}`],
+      this.height / 2,
+      this.width,
+      { font: '28px monospace', fillStyle: '#ffffff', lineHeight: 40 }
+    );
+
+    // High score
+    const isNewHigh = this.score > 0 && this.score >= this.highScore;
+    const highLabel = isNewHigh ? `★ NEW HIGH SCORE: ${this.highScore} ★` : `HIGH SCORE: ${this.highScore}`;
+    drawCenteredText(ctx,
+      [highLabel],
+      this.height / 2 + 48,
+      this.width,
+      { font: '22px monospace', fillStyle: '#ffff00', lineHeight: 30 }
+    );
+
+    // Any-key prompt
+    drawCenteredText(ctx,
+      ['PRESS ANY KEY OR CLICK TO CONTINUE'],
+      this.height / 2 + 100,
+      this.width,
+      { font: '18px monospace', fillStyle: '#aaaaaa', lineHeight: 28 }
     );
   }
 
